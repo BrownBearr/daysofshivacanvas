@@ -1,33 +1,39 @@
 import * as React from "react";
 import { cameraState } from "../canvas/camera-state";
+import type { ClipData } from "../types";
 
 interface ChromeProps {
-  total: number;
+  clips: ClipData[];
 }
 
-export function Chrome({ total }: ChromeProps) {
+export function Chrome({ clips }: ChromeProps) {
   const [focusedId, setFocusedId] = React.useState<number | null>(null);
   const [showHelp, setShowHelp] = React.useState(false);
 
-  // Poll cameraState ref for focused tile ID
   React.useEffect(() => {
-    const id = setInterval(() => {
-      setFocusedId(cameraState.focusedTileId);
-    }, 50);
+    const id = setInterval(() => setFocusedId(cameraState.focusedTileId), 50);
     return () => clearInterval(id);
   }, []);
 
-  const dayLabel = focusedId !== null ? String(focusedId + 1).padStart(3, "0") : null;
-  const totalLabel = String(total).padStart(3, "0");
+  const focusedClip = focusedId !== null ? clips[focusedId] : null;
 
   return (
     <div className="fixed inset-0 pointer-events-none select-none" style={{ fontFamily: "Inter, system-ui, sans-serif" }}>
       {/* Day counter — bottom left */}
-      <div className="absolute bottom-6 left-6 pointer-events-auto">
-        <span style={{ fontSize: 11, letterSpacing: "0.08em", color: "rgba(0,0,0,0.35)", fontWeight: 400 }}>
-          {dayLabel ? `${dayLabel} / ${totalLabel}` : `— / ${totalLabel}`}
+      <div className="absolute bottom-6 left-6">
+        <span style={{ fontSize: 11, letterSpacing: "0.08em", color: "rgba(0,0,0,0.3)", fontWeight: 400 }}>
+          {clips.length} days
         </span>
       </div>
+
+      {/* Focused clip name — bottom center */}
+      {focusedClip && (
+        <div className="absolute bottom-6 left-1/2" style={{ transform: "translateX(-50%)" }}>
+          <span style={{ fontSize: 11, letterSpacing: "0.12em", color: "rgba(0,0,0,0.45)", fontWeight: 400 }}>
+            {focusedClip.name}
+          </span>
+        </div>
+      )}
 
       {/* Help glyph — bottom right */}
       <div
@@ -35,40 +41,30 @@ export function Chrome({ total }: ChromeProps) {
         onMouseEnter={() => setShowHelp(true)}
         onMouseLeave={() => setShowHelp(false)}
       >
-        <span style={{ fontSize: 11, color: "rgba(0,0,0,0.25)", cursor: "default", letterSpacing: "0.04em" }}>?</span>
+        <span style={{ fontSize: 11, color: "rgba(0,0,0,0.2)", cursor: "default" }}>?</span>
         {showHelp && (
           <div
             className="absolute bottom-6 right-0"
             style={{
-              background: "rgba(245,245,240,0.92)",
+              background: "rgba(255,255,255,0.9)",
               backdropFilter: "blur(8px)",
-              border: "1px solid rgba(0,0,0,0.08)",
+              border: "1px solid rgba(0,0,0,0.06)",
               borderRadius: 8,
               padding: "10px 14px",
               minWidth: 160,
               fontSize: 11,
-              color: "rgba(0,0,0,0.5)",
+              color: "rgba(0,0,0,0.45)",
               lineHeight: 1.9,
               whiteSpace: "nowrap",
             }}
           >
             <div>Drag — pan</div>
             <div>Scroll — zoom</div>
-            <div>Click — focus tile</div>
+            <div>Click — focus</div>
             <div>Esc — dismiss</div>
           </div>
         )}
       </div>
-
-      {/* Focused tile overlay — day number */}
-      {focusedId !== null && (
-        <div
-          className="absolute bottom-6 left-1/2"
-          style={{ transform: "translateX(-50%)", fontSize: 11, color: "rgba(0,0,0,0.4)", letterSpacing: "0.1em" }}
-        >
-          day {dayLabel}
-        </div>
-      )}
     </div>
   );
 }

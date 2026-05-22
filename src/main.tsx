@@ -7,12 +7,11 @@ import { Chrome } from "./ui/Chrome";
 
 function App() {
   const clips = clipsData.clips;
-  const total = clipsData.total;
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
       <Scene clips={clips} />
-      <Chrome total={total} />
+      <Chrome clips={clips} />
     </div>
   );
 }

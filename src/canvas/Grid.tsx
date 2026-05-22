@@ -16,20 +16,20 @@ interface GridProps {
   clips: ClipData[];
 }
 
-// Build the full tile list from the clips manifest (Phase 1: repeat clips to fill 3×3)
 function buildTiles(clips: ClipData[]): TileEntry[] {
-  const total = GRID_COLS * GRID_COLS; // 3×3 = 9 for Phase 1
-  const tiles: TileEntry[] = [];
-  const rows = Math.ceil(total / GRID_COLS);
-  const gridW = GRID_COLS * TILE_SPACING;
+  const total = clips.length;
+  const cols = GRID_COLS;
+  const rows = Math.ceil(total / cols);
+  const gridW = cols * TILE_SPACING;
   const gridH = rows * TILE_SPACING;
+  const tiles: TileEntry[] = [];
 
   for (let i = 0; i < total; i++) {
-    const col = i % GRID_COLS;
-    const row = Math.floor(i / GRID_COLS);
+    const col = i % cols;
+    const row = Math.floor(i / cols);
     tiles.push({
       tileIndex: i,
-      clip: clips[i % clips.length],
+      clip: clips[i],
       worldX: col * TILE_SPACING - gridW / 2 + TILE_SPACING / 2,
       worldY: -(row * TILE_SPACING - gridH / 2 + TILE_SPACING / 2),
     });

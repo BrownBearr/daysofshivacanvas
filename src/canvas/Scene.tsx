@@ -2,19 +2,20 @@ import * as React from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { damp3 } from "maath/easing";
 import { BG_COLOR, INITIAL_CAM_Z, MIN_CAM_Z, MAX_CAM_Z } from "../theme";
-import { cameraState } from "./camera-state";
+import { cameraState, unfocusTile } from "./camera-state";
 import { Grid } from "./Grid";
 import type { ClipData } from "../types";
 
-const VELOCITY_LERP = 0.14;
-const VELOCITY_DECAY = 0.88;
-const MAX_VEL = 2.5;
-const SCROLL_SENSITIVITY = 0.006;
-const DRAG_SENSITIVITY = 0.025;
-const TOUCH_DRAG_SENSITIVITY = 0.02;
+const VELOCITY_LERP = 0.10;
+const VELOCITY_DECAY = 0.85;
+const MAX_VEL = 1.8;
+const SCROLL_SENSITIVITY = 0.0025;
+const DRAG_SENSITIVITY = 0.012;
+const TOUCH_DRAG_SENSITIVITY = 0.010;
 const CLICK_THRESHOLD = 5;
 const TOUCH_CLICK_THRESHOLD = 15;
-const FOCUS_DAMP = 0.1;
+// lambda for focus/unfocus damp — higher = faster (tune for feel)
+const FOCUS_LAMBDA = 5;
 
 function getTouchDistance(touches: TouchList): number {
   if (touches.length < 2) return 0;
@@ -26,16 +27,15 @@ function getTouchDistance(touches: TouchList): number {
 function CameraController() {
   const { camera } = useThree();
   const maxDragDist = React.useRef(0);
-  const focusTarget = React.useRef({ x: 0, y: 0, z: INITIAL_CAM_Z });
 
   React.useEffect(() => {
-    const el = document.body;
+    const body = document.body;
 
     const onMouseDown = (e: MouseEvent) => {
       cameraState.isDragging = false;
       maxDragDist.current = 0;
       cameraState.lastMouse = { x: e.clientX, y: e.clientY };
-      el.style.cursor = "grabbing";
+      body.style.cursor = "grabbing";
       window.addEventListener("mousemove", onMouseMove);
       window.addEventListener("mouseup", onMouseUp);
     };
@@ -46,7 +46,6 @@ function CameraController() {
       const dist = Math.sqrt(dx * dx + dy * dy);
       if (dist > maxDragDist.current) maxDragDist.current = dist;
       if (maxDragDist.current > CLICK_THRESHOLD) cameraState.isDragging = true;
-
       if (cameraState.isDragging) {
         cameraState.targetVel.x -= dx * DRAG_SENSITIVITY;
         cameraState.targetVel.y += dy * DRAG_SENSITIVITY;
@@ -55,13 +54,10 @@ function CameraController() {
     };
 
     const onMouseUp = () => {
-      el.style.cursor = "";
+      body.style.cursor = "";
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
-      // Reset isDragging after a tick so click handlers can check it
-      setTimeout(() => {
-        cameraState.isDragging = false;
-      }, 0);
+      setTimeout(() => { cameraState.isDragging = false; }, 0);
     };
 
     const onWheel = (e: WheelEvent) => {
@@ -70,15 +66,9 @@ function CameraController() {
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && cameraState.focusedTileId !== null) {
-        cameraState.focusedTileId = null;
-        cameraState.pos.copy(cameraState.preFocusPos);
-        cameraState.targetVel.set(0, 0, 0);
-        cameraState.vel.set(0, 0, 0);
-      }
+      if (e.key === "Escape") unfocusTile();
     };
 
-    // Touch
     const onTouchStart = (e: TouchEvent) => {
       cameraState.isDragging = false;
       maxDragDist.current = 0;
@@ -109,11 +99,7 @@ function CameraController() {
       }
     };
 
-    const onTouchEnd = () => {
-      setTimeout(() => {
-        cameraState.isDragging = false;
-      }, 0);
-    };
+    const onTouchEnd = () => { setTimeout(() => { cameraState.isDragging = false; }, 0); };
 
     const canvas = document.querySelector("canvas");
     canvas?.addEventListener("mousedown", onMouseDown);
@@ -136,40 +122,43 @@ function CameraController() {
   }, []);
 
   useFrame((_, delta) => {
-    // Apply scroll to Z velocity
-    cameraState.targetVel.z += cameraState.scrollAccum;
-    cameraState.scrollAccum *= 0.75;
+    // Velocity physics — only applied during free nav
+    if (!cameraState.focusedTileId && !cameraState.isAnimatingFocus) {
+      cameraState.targetVel.z += cameraState.scrollAccum;
+      cameraState.scrollAccum *= 0.7;
 
-    // Clamp velocities
-    cameraState.targetVel.x = Math.max(-MAX_VEL, Math.min(MAX_VEL, cameraState.targetVel.x));
-    cameraState.targetVel.y = Math.max(-MAX_VEL, Math.min(MAX_VEL, cameraState.targetVel.y));
-    cameraState.targetVel.z = Math.max(-MAX_VEL, Math.min(MAX_VEL, cameraState.targetVel.z));
+      cameraState.targetVel.x = Math.max(-MAX_VEL, Math.min(MAX_VEL, cameraState.targetVel.x));
+      cameraState.targetVel.y = Math.max(-MAX_VEL, Math.min(MAX_VEL, cameraState.targetVel.y));
+      cameraState.targetVel.z = Math.max(-MAX_VEL, Math.min(MAX_VEL, cameraState.targetVel.z));
 
-    // Lerp velocity (inertia)
-    cameraState.vel.x += (cameraState.targetVel.x - cameraState.vel.x) * VELOCITY_LERP;
-    cameraState.vel.y += (cameraState.targetVel.y - cameraState.vel.y) * VELOCITY_LERP;
-    cameraState.vel.z += (cameraState.targetVel.z - cameraState.vel.z) * VELOCITY_LERP;
+      cameraState.vel.x += (cameraState.targetVel.x - cameraState.vel.x) * VELOCITY_LERP;
+      cameraState.vel.y += (cameraState.targetVel.y - cameraState.vel.y) * VELOCITY_LERP;
+      cameraState.vel.z += (cameraState.targetVel.z - cameraState.vel.z) * VELOCITY_LERP;
 
-    if (cameraState.focusedTileId === null) {
-      // Free navigation
       cameraState.pos.x += cameraState.vel.x;
       cameraState.pos.y += cameraState.vel.y;
       cameraState.pos.z = Math.max(MIN_CAM_Z, Math.min(MAX_CAM_Z, cameraState.pos.z + cameraState.vel.z));
-    } else {
-      // Smooth camera to focus target (set by Tile on click)
-      focusTarget.current.x = cameraState.pos.x;
-      focusTarget.current.y = cameraState.pos.y;
-      focusTarget.current.z = cameraState.pos.z;
-      damp3(camera.position, [focusTarget.current.x, focusTarget.current.y, focusTarget.current.z], FOCUS_DAMP, delta);
-    }
 
-    // Decay velocity
-    cameraState.targetVel.x *= VELOCITY_DECAY;
-    cameraState.targetVel.y *= VELOCITY_DECAY;
-    cameraState.targetVel.z *= VELOCITY_DECAY;
+      cameraState.targetVel.x *= VELOCITY_DECAY;
+      cameraState.targetVel.y *= VELOCITY_DECAY;
+      cameraState.targetVel.z *= VELOCITY_DECAY;
 
-    if (cameraState.focusedTileId === null) {
+      cameraState.animTarget.copy(cameraState.pos);
       camera.position.set(cameraState.pos.x, cameraState.pos.y, cameraState.pos.z);
+    } else {
+      // Focus or unfocus: damp camera toward animTarget
+      cameraState.scrollAccum = 0;
+      damp3(camera.position, [cameraState.animTarget.x, cameraState.animTarget.y, cameraState.animTarget.z], FOCUS_LAMBDA, delta);
+
+      if (cameraState.isAnimatingFocus) {
+        const dx = camera.position.x - cameraState.animTarget.x;
+        const dy = camera.position.y - cameraState.animTarget.y;
+        const dz = camera.position.z - cameraState.animTarget.z;
+        if (dx * dx + dy * dy + dz * dz < 0.0001) {
+          cameraState.isAnimatingFocus = false;
+          cameraState.pos.copy(cameraState.animTarget);
+        }
+      }
     }
   });
 
@@ -184,14 +173,11 @@ export function Scene({ clips }: SceneProps) {
   return (
     <Canvas
       camera={{ position: [0, 0, INITIAL_CAM_Z], fov: 45, near: 0.1, far: 1000 }}
-      gl={{
-        antialias: false,
-        powerPreference: "high-performance",
-        alpha: false,
-      }}
+      gl={{ antialias: false, powerPreference: "high-performance", alpha: false }}
       dpr={Math.min(typeof window !== "undefined" ? window.devicePixelRatio : 1, 1.5)}
-      style={{ background: BG_COLOR }}
+      onPointerMissed={unfocusTile}
     >
+      <color attach="background" args={[BG_COLOR]} />
       <CameraController />
       <Grid clips={clips} />
     </Canvas>

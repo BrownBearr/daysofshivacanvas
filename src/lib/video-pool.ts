@@ -77,6 +77,11 @@ class VideoPool {
     if (oldest !== undefined) this.release(oldest);
   }
 
+  getElement(tileId: number): HTMLVideoElement | undefined {
+    const index = this.assignments.get(tileId);
+    return index !== undefined ? this.elements[index] : undefined;
+  }
+
   destroy(): void {
     for (const el of this.elements) {
       el.pause();

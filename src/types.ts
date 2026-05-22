@@ -1,5 +1,6 @@
 export interface ClipData {
   id: number;
+  name: string;
   preview: string;
   poster: string;
 }
