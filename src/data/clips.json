@@ -1,0 +1,8 @@
+{
+  "clips": [
+    { "id": 1, "preview": "/test-clips/clip-001.mp4", "poster": "/test-clips/poster-001.jpg" },
+    { "id": 2, "preview": "/test-clips/clip-002.mp4", "poster": "/test-clips/poster-002.jpg" },
+    { "id": 3, "preview": "/test-clips/clip-003.mp4", "poster": "/test-clips/poster-003.jpg" }
+  ],
+  "total": 3
+}
