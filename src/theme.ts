@@ -12,7 +12,7 @@ export const TILE_SPACING = TILE_W * 1.12; // center-to-center (small margin bet
 // Camera
 export const INITIAL_CAM_Z = 8;
 export const MIN_CAM_Z = 2;
-export const MAX_CAM_Z = 25;
+export const MAX_CAM_Z = 14;
 
 // Chunk system
 export const CHUNK_TILE_COUNT = 8; // tiles per chunk side
