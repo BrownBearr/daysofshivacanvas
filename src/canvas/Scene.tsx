@@ -14,9 +14,9 @@ const DRAG_SENSITIVITY = 0.012;
 const TOUCH_DRAG_SENSITIVITY = 0.010;
 const CLICK_THRESHOLD = 5;
 const TOUCH_CLICK_THRESHOLD = 15;
-// lambda for focus/unfocus damp — higher = faster (tune for feel)
-const FOCUS_LAMBDA = 9;
-const UNFOCUS_LAMBDA = 18;
+// maath damp3 smoothTime: approximate seconds to reach target — smaller = snappier (tune for feel)
+const FOCUS_SMOOTH_TIME = 0.22;
+const UNFOCUS_SMOOTH_TIME = 0.18;
 
 function getTouchDistance(touches: TouchList): number {
   if (touches.length < 2) return 0;
@@ -124,7 +124,7 @@ function CameraController() {
 
   useFrame((_, delta) => {
     // Velocity physics — only applied during free nav
-    if (!cameraState.focusedTileId && !cameraState.isAnimatingFocus) {
+    if (cameraState.focusedTileId === null && !cameraState.isAnimatingFocus) {
       cameraState.targetVel.z += cameraState.scrollAccum;
       cameraState.scrollAccum *= 0.7;
 
@@ -149,8 +149,8 @@ function CameraController() {
     } else {
       // Focus or unfocus: damp camera toward animTarget (zoom-out/unfocus snaps back faster)
       cameraState.scrollAccum = 0;
-      const lambda = cameraState.focusedTileId === null ? UNFOCUS_LAMBDA : FOCUS_LAMBDA;
-      damp3(camera.position, [cameraState.animTarget.x, cameraState.animTarget.y, cameraState.animTarget.z], lambda, delta);
+      const smoothTime = cameraState.focusedTileId === null ? UNFOCUS_SMOOTH_TIME : FOCUS_SMOOTH_TIME;
+      damp3(camera.position, [cameraState.animTarget.x, cameraState.animTarget.y, cameraState.animTarget.z], smoothTime, delta);
 
       if (cameraState.isAnimatingFocus) {
         const dx = camera.position.x - cameraState.animTarget.x;
