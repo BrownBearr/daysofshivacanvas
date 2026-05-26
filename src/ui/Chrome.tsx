@@ -1,5 +1,6 @@
 import * as React from "react";
 import { cameraState } from "../canvas/camera-state";
+import { muteState } from "../canvas/mute-state";
 import type { ClipData } from "../types";
 
 interface ChromeProps {
@@ -26,16 +27,40 @@ function denominatorForToday(): number {
 export function Chrome({ clips }: ChromeProps) {
   const [focusedId, setFocusedId] = React.useState<number | null>(null);
   const [showHelp, setShowHelp] = React.useState(false);
+  const [muted, setMuted] = React.useState(muteState.muted);
 
   React.useEffect(() => {
     const id = setInterval(() => setFocusedId(cameraState.focusedTileId), 50);
     return () => clearInterval(id);
   }, []);
 
+  function toggleMute() {
+    muteState.muted = !muteState.muted;
+    setMuted(muteState.muted);
+  }
+
   const focusedClip = focusedId !== null ? clips[focusedId] : null;
 
   return (
     <div className="fixed inset-0 pointer-events-none select-none" style={{ fontFamily: "Inter, system-ui, sans-serif" }}>
+      {/* Site headline — top left */}
+      <div className="absolute top-6 left-6">
+        <span style={{ fontSize: 13, letterSpacing: "0.18em", color: "rgba(0,0,0,0.55)", fontWeight: 500, textTransform: "uppercase" }}>
+          Days of Shiva
+        </span>
+      </div>
+
+      {/* Mute toggle — top right */}
+      <div
+        className="absolute top-6 right-6 pointer-events-auto"
+        onClick={toggleMute}
+        style={{ cursor: "pointer" }}
+      >
+        <span style={{ fontSize: 11, letterSpacing: "0.08em", color: "rgba(0,0,0,0.3)", fontWeight: 400 }}>
+          {muted ? "unmute" : "mute"}
+        </span>
+      </div>
+
       {/* Day counter — bottom left: videos in library / daily-growing target */}
       <div className="absolute bottom-6 left-6">
         <span style={{ fontSize: 11, letterSpacing: "0.08em", color: "rgba(0,0,0,0.3)", fontWeight: 400 }}>

@@ -7,6 +7,7 @@ import { TILE_W, TILE_H, MIN_CAM_Z } from "../theme";
 import { videoPool } from "../lib/video-pool";
 import { sourceUrl, previewUrl, posterUrl } from "../lib/clip-source";
 import { cameraState, focusTile, unfocusTile } from "./camera-state";
+import { muteState } from "./mute-state";
 
 interface TileProps {
   tileIndex: number;
@@ -186,7 +187,7 @@ export function Tile({ tileIndex, clip, position, inPlayRadius }: TileProps) {
       const el = videoElRef.current;
       if (el) {
         videoPool.acquire(tileIndex, sourceUrl(clip));
-        el.muted = false;
+        el.muted = muteState.muted;
         el.play().catch(() => {});
       }
     }
@@ -211,7 +212,7 @@ export function Tile({ tileIndex, clip, position, inPlayRadius }: TileProps) {
       if (el) {
         if (focused) {
           videoPool.acquire(tileIndex, sourceUrl(clip));
-          el.muted = false;
+          el.muted = muteState.muted;
           el.play().catch(() => {});
         } else if (shouldPlayRef.current) {
           videoPool.acquire(tileIndex, previewUrl(clip));
@@ -226,6 +227,9 @@ export function Tile({ tileIndex, clip, position, inPlayRadius }: TileProps) {
         }
       }
     }
+
+    // Keep focused clip's muted state in sync with the global mute toggle.
+    if (el && focused) el.muted = muteState.muted;
 
     // Fallback frame pump when requestVideoFrameCallback is unavailable.
     if (!usesRVFCRef.current && tex && el && !el.paused && el.readyState >= 2) {

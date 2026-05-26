@@ -4,7 +4,7 @@ export const ACCENT_COLOR = "#1a1a1a";
 export const WRAP_GRID = false;
 
 // Grid layout
-export const GRID_COLS = 6;
+export const GRID_COLS = 20;
 export const TILE_W = 1.4; // world units
 export const TILE_H = TILE_W; // square tiles; UV cropping handles non-square videos
 export const TILE_SPACING = TILE_W * 1.12; // center-to-center (small margin between tiles)
