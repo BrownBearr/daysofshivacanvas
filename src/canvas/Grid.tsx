@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useFrame } from "@react-three/fiber";
 import type { ClipData } from "../types";
-import { GRID_COLS, TILE_SPACING, CHUNK_SIZE, RENDER_CHUNKS, PLAY_RADIUS_CHUNKS } from "../theme";
+import { GRID_COLS, TILE_SPACING, CHUNK_SIZE, RENDER_CHUNKS, PLAY_COUNT } from "../theme";
 import { cameraState } from "./camera-state";
 import { Tile } from "./Tile";
 
@@ -37,39 +37,74 @@ function buildTiles(clips: ClipData[]): TileEntry[] {
   return tiles;
 }
 
+// Tiles within RENDER_CHUNKS of the camera chunk are mounted/painted.
+function computeVisible(tiles: TileEntry[]): TileEntry[] {
+  const cx = Math.round(cameraState.pos.x / CHUNK_SIZE);
+  const cy = Math.round(cameraState.pos.y / CHUNK_SIZE);
+  return tiles.filter((t) => {
+    const tcx = Math.round(t.worldX / CHUNK_SIZE);
+    const tcy = Math.round(t.worldY / CHUNK_SIZE);
+    return Math.max(Math.abs(tcx - cx), Math.abs(tcy - cy)) <= RENDER_CHUNKS;
+  });
+}
+
+// The PLAY_COUNT visible tiles closest to the camera get a real <video>; the rest stay posters.
+function computePlaySet(visible: TileEntry[]): Set<number> {
+  if (PLAY_COUNT <= 0) return new Set();
+  const px = cameraState.pos.x;
+  const py = cameraState.pos.y;
+  return new Set(
+    visible
+      .map((t) => ({ i: t.tileIndex, d: (t.worldX - px) ** 2 + (t.worldY - py) ** 2 }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, PLAY_COUNT)
+      .map((e) => e.i)
+  );
+}
+
+const PLAY_RECOMPUTE_DIST_SQ = (TILE_SPACING * 0.5) ** 2;
+
 export function Grid({ clips }: GridProps) {
   const tiles = React.useMemo(() => buildTiles(clips), [clips]);
   const [visibleSet, setVisibleSet] = React.useState<Set<number>>(new Set());
   const [playSet, setPlaySet] = React.useState<Set<number>>(new Set());
+
+  // Refs let the frame loop recompute without depending on React state snapshots.
+  const visibleTilesRef = React.useRef<TileEntry[]>([]);
   const lastChunkKey = React.useRef("");
+  const lastPlayPos = React.useRef({ x: Number.POSITIVE_INFINITY, y: Number.POSITIVE_INFINITY });
+
+  // Seed visible/play sets from the camera's starting position.
+  React.useEffect(() => {
+    const vis = computeVisible(tiles);
+    visibleTilesRef.current = vis;
+    lastChunkKey.current = `${Math.round(cameraState.pos.x / CHUNK_SIZE)},${Math.round(cameraState.pos.y / CHUNK_SIZE)}`;
+    lastPlayPos.current = { x: cameraState.pos.x, y: cameraState.pos.y };
+    setVisibleSet(new Set(vis.map((t) => t.tileIndex)));
+    setPlaySet(computePlaySet(vis));
+  }, [tiles]);
 
   useFrame(() => {
     const cx = Math.round(cameraState.pos.x / CHUNK_SIZE);
     const cy = Math.round(cameraState.pos.y / CHUNK_SIZE);
-    const key = `${cx},${cy}`;
-    if (key === lastChunkKey.current) return;
-    lastChunkKey.current = key;
+    const chunkKey = `${cx},${cy}`;
 
-    const newVisible = new Set<number>();
-    const newPlay = new Set<number>();
-
-    for (const tile of tiles) {
-      const tcx = Math.round(tile.worldX / CHUNK_SIZE);
-      const tcy = Math.round(tile.worldY / CHUNK_SIZE);
-      const dist = Math.max(Math.abs(tcx - cx), Math.abs(tcy - cy));
-      if (dist <= RENDER_CHUNKS) newVisible.add(tile.tileIndex);
-      if (dist <= PLAY_RADIUS_CHUNKS) newPlay.add(tile.tileIndex);
+    let visibleChanged = false;
+    if (chunkKey !== lastChunkKey.current) {
+      lastChunkKey.current = chunkKey;
+      const vis = computeVisible(tiles);
+      visibleTilesRef.current = vis;
+      setVisibleSet(new Set(vis.map((t) => t.tileIndex)));
+      visibleChanged = true;
     }
 
-    setVisibleSet(newVisible);
-    setPlaySet(newPlay);
+    const dx = cameraState.pos.x - lastPlayPos.current.x;
+    const dy = cameraState.pos.y - lastPlayPos.current.y;
+    if (visibleChanged || dx * dx + dy * dy > PLAY_RECOMPUTE_DIST_SQ) {
+      lastPlayPos.current = { x: cameraState.pos.x, y: cameraState.pos.y };
+      setPlaySet(computePlaySet(visibleTilesRef.current));
+    }
   });
-
-  // On first mount show everything (small Phase 1 grid fits in one chunk)
-  React.useEffect(() => {
-    setVisibleSet(new Set(tiles.map((t) => t.tileIndex)));
-    setPlaySet(new Set(tiles.map((t) => t.tileIndex)));
-  }, [tiles]);
 
   return (
     <group>

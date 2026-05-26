@@ -1,8 +1,6 @@
 export interface ClipData {
   id: number;
-  name: string;
-  preview: string;
-  poster: string;
+  name: string; // clip number; all B2 asset URLs are derived from this (see lib/clip-source)
 }
 
 export interface TileData {

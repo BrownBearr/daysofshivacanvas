@@ -6,6 +6,23 @@ interface ChromeProps {
   clips: ClipData[];
 }
 
+// Counter denominator: a target that grows by one at the end of every day.
+// Anchored so that 2026-05-25 (local) reads 1733; each day past that adds 1.
+const DENOM_BASE = 1733;
+const DENOM_ANCHOR = new Date(2026, 4, 25); // local midnight, May 25 2026
+
+function denominatorForToday(): number {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const anchor = new Date(
+    DENOM_ANCHOR.getFullYear(),
+    DENOM_ANCHOR.getMonth(),
+    DENOM_ANCHOR.getDate()
+  ).getTime();
+  const daysElapsed = Math.max(0, Math.floor((today - anchor) / 86_400_000));
+  return DENOM_BASE + daysElapsed;
+}
+
 export function Chrome({ clips }: ChromeProps) {
   const [focusedId, setFocusedId] = React.useState<number | null>(null);
   const [showHelp, setShowHelp] = React.useState(false);
@@ -19,10 +36,10 @@ export function Chrome({ clips }: ChromeProps) {
 
   return (
     <div className="fixed inset-0 pointer-events-none select-none" style={{ fontFamily: "Inter, system-ui, sans-serif" }}>
-      {/* Day counter — bottom left */}
+      {/* Day counter — bottom left: videos in library / daily-growing target */}
       <div className="absolute bottom-6 left-6">
         <span style={{ fontSize: 11, letterSpacing: "0.08em", color: "rgba(0,0,0,0.3)", fontWeight: 400 }}>
-          {clips.length} days
+          {clips.length} / {denominatorForToday()}
         </span>
       </div>
 

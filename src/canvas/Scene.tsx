@@ -15,7 +15,8 @@ const TOUCH_DRAG_SENSITIVITY = 0.010;
 const CLICK_THRESHOLD = 5;
 const TOUCH_CLICK_THRESHOLD = 15;
 // lambda for focus/unfocus damp — higher = faster (tune for feel)
-const FOCUS_LAMBDA = 5;
+const FOCUS_LAMBDA = 9;
+const UNFOCUS_LAMBDA = 18;
 
 function getTouchDistance(touches: TouchList): number {
   if (touches.length < 2) return 0;
@@ -146,15 +147,19 @@ function CameraController() {
       cameraState.animTarget.copy(cameraState.pos);
       camera.position.set(cameraState.pos.x, cameraState.pos.y, cameraState.pos.z);
     } else {
-      // Focus or unfocus: damp camera toward animTarget
+      // Focus or unfocus: damp camera toward animTarget (zoom-out/unfocus snaps back faster)
       cameraState.scrollAccum = 0;
-      damp3(camera.position, [cameraState.animTarget.x, cameraState.animTarget.y, cameraState.animTarget.z], FOCUS_LAMBDA, delta);
+      const lambda = cameraState.focusedTileId === null ? UNFOCUS_LAMBDA : FOCUS_LAMBDA;
+      damp3(camera.position, [cameraState.animTarget.x, cameraState.animTarget.y, cameraState.animTarget.z], lambda, delta);
 
       if (cameraState.isAnimatingFocus) {
         const dx = camera.position.x - cameraState.animTarget.x;
         const dy = camera.position.y - cameraState.animTarget.y;
         const dz = camera.position.z - cameraState.animTarget.z;
-        if (dx * dx + dy * dy + dz * dz < 0.0001) {
+        // Unfocus unlocks controls early (looser threshold) so you can pan/zoom the instant
+        // it's visually back, instead of waiting out the damp's slow tail.
+        const endSq = cameraState.focusedTileId === null ? 0.02 : 0.0001;
+        if (dx * dx + dy * dy + dz * dz < endSq) {
           cameraState.isAnimatingFocus = false;
           cameraState.pos.copy(cameraState.animTarget);
         }

@@ -12,6 +12,11 @@ dist
 dist-ssr
 *.local
 
+# Env (VITE_ vars are public; B2 upload keys are secret — never commit either)
+.env
+.env.*
+!.env.example
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

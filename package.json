@@ -8,9 +8,14 @@
     "build": "tsc -b && vite build",
     "lint": "biome check .",
     "format": "biome format --write .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "clips:cors": "node scripts/normalize-b2.mjs --cors-only",
+    "clips:dry": "node scripts/normalize-b2.mjs --dry-run",
+    "clips:normalize": "node scripts/normalize-b2.mjs",
+    "clips:manifest": "node scripts/normalize-b2.mjs --manifest-only"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1053.0",
     "@react-spring/three": "^10.1.0",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.6.1",

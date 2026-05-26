@@ -11,11 +11,24 @@ class VideoPool {
     this.elements = Array.from({ length: size }, () => {
       const el = document.createElement("video");
       el.muted = true;
+      // Required: B2-hosted videos are drawn into a WebGL VideoTexture, which taints
+      // the canvas (SecurityError) unless the element opts into CORS and the bucket
+      // returns Access-Control-Allow-Origin. Set before any src is assigned.
+      el.crossOrigin = "anonymous";
       el.loop = true;
       el.playsInline = true;
       el.preload = "metadata";
-      el.style.display = "none";
-      el.style.position = "absolute";
+      // NOT display:none. Browsers keep playing a hidden video's audio but stop decoding
+      // its frames, so a WebGL VideoTexture would never receive pixels. Park it as a 1px,
+      // near-invisible, click-through element so the compositor still produces frames.
+      el.style.position = "fixed";
+      el.style.top = "0";
+      el.style.left = "0";
+      el.style.width = "1px";
+      el.style.height = "1px";
+      el.style.opacity = "0.01";
+      el.style.pointerEvents = "none";
+      el.style.zIndex = "-1";
       document.body.appendChild(el);
       return el;
     });
@@ -29,6 +42,7 @@ class VideoPool {
       const el = this.elements[existing];
       if (el.src !== src && src) {
         el.src = src;
+        el.load();
         el.play().catch(() => {});
       }
       return el;
