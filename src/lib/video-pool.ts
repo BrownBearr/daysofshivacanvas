@@ -2,10 +2,10 @@ import { POOL_SIZE } from "../theme";
 
 class VideoPool {
   private elements: HTMLVideoElement[];
-  // tileId → index into elements[]
-  private assignments: Map<number, number> = new Map();
+  // tileId (cell key "gx:gy") → index into elements[]
+  private assignments: Map<string, number> = new Map();
   // tileIds oldest-first (front = LRU candidate)
-  private lru: number[] = [];
+  private lru: string[] = [];
 
   constructor(size: number = POOL_SIZE) {
     this.elements = Array.from({ length: size }, () => {
@@ -34,7 +34,7 @@ class VideoPool {
     });
   }
 
-  acquire(tileId: number, src: string): HTMLVideoElement | null {
+  acquire(tileId: string, src: string): HTMLVideoElement | null {
     // Already assigned — update LRU position and return
     const existing = this.assignments.get(tileId);
     if (existing !== undefined) {
@@ -70,7 +70,7 @@ class VideoPool {
     return el;
   }
 
-  release(tileId: number): void {
+  release(tileId: string): void {
     const index = this.assignments.get(tileId);
     if (index === undefined) return;
     const el = this.elements[index];
@@ -81,7 +81,7 @@ class VideoPool {
     this.lru = this.lru.filter((id) => id !== tileId);
   }
 
-  private touchLRU(tileId: number): void {
+  private touchLRU(tileId: string): void {
     this.lru = this.lru.filter((id) => id !== tileId);
     this.lru.push(tileId);
   }
@@ -91,7 +91,7 @@ class VideoPool {
     if (oldest !== undefined) this.release(oldest);
   }
 
-  getElement(tileId: number): HTMLVideoElement | undefined {
+  getElement(tileId: string): HTMLVideoElement | undefined {
     const index = this.assignments.get(tileId);
     return index !== undefined ? this.elements[index] : undefined;
   }

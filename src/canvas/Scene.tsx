@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { damp3 } from "maath/easing";
-import { BG_COLOR, INITIAL_CAM_Z, MIN_CAM_Z, MAX_CAM_Z } from "../theme";
+import { BG_COLOR, INITIAL_CAM_Z, MIN_CAM_Z, MAX_CAM_Z, IS_MOBILE } from "../theme";
 import { cameraState, unfocusTile } from "./camera-state";
 import { Grid } from "./Grid";
 import type { ClipData } from "../types";
@@ -179,7 +179,7 @@ export function Scene({ clips }: SceneProps) {
     <Canvas
       camera={{ position: [0, 0, INITIAL_CAM_Z], fov: 45, near: 0.1, far: 1000 }}
       gl={{ antialias: false, powerPreference: "high-performance", alpha: false }}
-      dpr={Math.min(typeof window !== "undefined" ? window.devicePixelRatio : 1, 1.5)}
+      dpr={Math.min(typeof window !== "undefined" ? window.devicePixelRatio : 1, IS_MOBILE ? 1 : 1.5)}
       onPointerMissed={unfocusTile}
     >
       <color attach="background" args={[BG_COLOR]} />

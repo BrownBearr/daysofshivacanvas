@@ -11,17 +11,20 @@ export const cameraState = {
   scrollAccum: 0,
   isDragging: false,
   lastMouse: { x: 0, y: 0 },
-  focusedTileId: null as number | null,
+  focusedTileId: null as string | null,
+  // Name of the focused clip, for the UI overlay (cell key can't index the clips array).
+  focusedClipName: null as string | null,
   isAnimatingFocus: false,
   preFocusTarget: new THREE.Vector3(0, 0, INITIAL_CAM_Z),
-  hoveredTileId: null as number | null,
+  hoveredTileId: null as string | null,
   lastTouchPos: { x: 0, y: 0 },
   lastTouchDist: 0,
 };
 
-export function focusTile(tileId: number, x: number, y: number, z: number) {
+export function focusTile(tileId: string, x: number, y: number, z: number, clipName: string) {
   cameraState.preFocusTarget.copy(cameraState.animTarget);
   cameraState.focusedTileId = tileId;
+  cameraState.focusedClipName = clipName;
   cameraState.animTarget.set(x, y, Math.max(z, MIN_CAM_Z));
   cameraState.pos.copy(cameraState.animTarget);
   cameraState.isAnimatingFocus = true;
@@ -32,6 +35,7 @@ export function focusTile(tileId: number, x: number, y: number, z: number) {
 export function unfocusTile() {
   if (cameraState.focusedTileId === null) return;
   cameraState.focusedTileId = null;
+  cameraState.focusedClipName = null;
   cameraState.animTarget.copy(cameraState.preFocusTarget);
   cameraState.pos.copy(cameraState.preFocusTarget);
   cameraState.isAnimatingFocus = true;

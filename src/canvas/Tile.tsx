@@ -10,7 +10,9 @@ import { cameraState, focusTile, unfocusTile } from "./camera-state";
 import { muteState } from "./mute-state";
 
 interface TileProps {
-  tileIndex: number;
+  // Unique per-cell identity on the infinite lattice ("gx:gy") — NOT the clip index,
+  // since the same clip can appear in many cells once the grid wraps.
+  tileKey: string;
   clip: ClipData;
   position: [number, number, number];
   // True when this tile is among the camera's nearest tiles and should auto-play.
@@ -67,7 +69,7 @@ function loadPoster(url: string): Promise<THREE.Texture> {
   });
 }
 
-export function Tile({ tileIndex, clip, position, inPlayRadius }: TileProps) {
+export function Tile({ tileKey, clip, position, inPlayRadius }: TileProps) {
   const { camera } = useThree();
   const matRef = React.useRef<THREE.MeshBasicMaterial>(null);
   const videoTexRef = React.useRef<THREE.VideoTexture | null>(null);
@@ -102,7 +104,7 @@ export function Tile({ tileIndex, clip, position, inPlayRadius }: TileProps) {
   // Acquire / release a pooled <video> as the tile enters/leaves the play-or-hover state.
   React.useEffect(() => {
     if (!shouldPlay) {
-      videoPool.release(tileIndex);
+      videoPool.release(tileKey);
       if (videoTexRef.current) { videoTexRef.current.dispose(); videoTexRef.current = null; }
       videoElRef.current = null;
       videoReadyRef.current = false;
@@ -113,7 +115,7 @@ export function Tile({ tileIndex, clip, position, inPlayRadius }: TileProps) {
       return;
     }
 
-    const el = videoPool.acquire(tileIndex, previewUrl(clip)) as RVFCVideo | null;
+    const el = videoPool.acquire(tileKey, previewUrl(clip)) as RVFCVideo | null;
     if (!el) return;
     videoElRef.current = el;
 
@@ -154,13 +156,13 @@ export function Tile({ tileIndex, clip, position, inPlayRadius }: TileProps) {
 
     return () => {
       if (supportsRVFC && rvfcHandle) el.cancelVideoFrameCallback?.(rvfcHandle);
-      videoPool.release(tileIndex);
+      videoPool.release(tileKey);
       tex.dispose();
       videoTexRef.current = null;
       videoElRef.current = null;
       videoReadyRef.current = false;
     };
-  }, [shouldPlay, tileIndex, clip]);
+  }, [shouldPlay, tileKey, clip]);
 
   // Apply poster once loaded (unless the video is already showing its frames)
   React.useEffect(() => {
@@ -169,7 +171,7 @@ export function Tile({ tileIndex, clip, position, inPlayRadius }: TileProps) {
     matRef.current.needsUpdate = true;
   }, [posterTex]);
 
-  const isFocused = () => cameraState.focusedTileId === tileIndex;
+  const isFocused = () => cameraState.focusedTileId === tileKey;
 
   const handleClick = (e: { stopPropagation: () => void }) => {
     e.stopPropagation();
@@ -180,13 +182,13 @@ export function Tile({ tileIndex, clip, position, inPlayRadius }: TileProps) {
     } else {
       const fovRad = (camera as THREE.PerspectiveCamera).fov * (Math.PI / 180);
       const fitZ = (TILE_W * 1.2) / (2 * Math.tan(fovRad / 2));
-      focusTile(tileIndex, position[0], position[1], Math.max(fitZ, MIN_CAM_Z));
+      focusTile(tileKey, position[0], position[1], Math.max(fitZ, MIN_CAM_Z), clip.name);
       // If a video element is already bound, upgrade to the full source and unmute now,
       // inside the user gesture. Otherwise the frame loop swaps it in once the tile
       // becomes the camera's nearest tile (it will, since we zoom to it).
       const el = videoElRef.current;
       if (el) {
-        videoPool.acquire(tileIndex, sourceUrl(clip));
+        videoPool.acquire(tileKey, sourceUrl(clip));
         el.muted = muteState.muted;
         el.play().catch(() => {});
       }
@@ -206,16 +208,16 @@ export function Tile({ tileIndex, clip, position, inPlayRadius }: TileProps) {
     const el = videoElRef.current;
 
     // Focus edge: swap preview<->source and toggle mute exactly when focus changes.
-    const focused = cameraState.focusedTileId === tileIndex;
+    const focused = cameraState.focusedTileId === tileKey;
     if (focused !== wasFocusedRef.current) {
       wasFocusedRef.current = focused;
       if (el) {
         if (focused) {
-          videoPool.acquire(tileIndex, sourceUrl(clip));
+          videoPool.acquire(tileKey, sourceUrl(clip));
           el.muted = muteState.muted;
           el.play().catch(() => {});
         } else if (shouldPlayRef.current) {
-          videoPool.acquire(tileIndex, previewUrl(clip));
+          videoPool.acquire(tileKey, previewUrl(clip));
           el.muted = true;
         }
         if (tex) {
@@ -255,12 +257,12 @@ export function Tile({ tileIndex, clip, position, inPlayRadius }: TileProps) {
       onPointerOver={(e) => {
         e.stopPropagation();
         setHovered(true);
-        cameraState.hoveredTileId = tileIndex;
+        cameraState.hoveredTileId = tileKey;
         document.body.style.cursor = "pointer";
       }}
       onPointerOut={() => {
         setHovered(false);
-        if (cameraState.hoveredTileId === tileIndex) cameraState.hoveredTileId = null;
+        if (cameraState.hoveredTileId === tileKey) cameraState.hoveredTileId = null;
         document.body.style.cursor = "";
       }}
       onClick={handleClick}

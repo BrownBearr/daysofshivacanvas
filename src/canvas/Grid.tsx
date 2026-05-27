@@ -1,124 +1,148 @@
 import * as React from "react";
-import { useFrame } from "@react-three/fiber";
+import * as THREE from "three";
+import { useFrame, useThree } from "@react-three/fiber";
 import type { ClipData } from "../types";
-import { GRID_COLS, TILE_SPACING, CHUNK_SIZE, RENDER_CHUNKS, PLAY_COUNT } from "../theme";
+import { GRID_COLS, TILE_SPACING, PLAY_COUNT, VISIBLE_MARGIN_TILES } from "../theme";
 import { cameraState } from "./camera-state";
 import { Tile } from "./Tile";
-
-interface TileEntry {
-  tileIndex: number;
-  clip: ClipData;
-  worldX: number;
-  worldY: number;
-}
 
 interface GridProps {
   clips: ClipData[];
 }
 
-function buildTiles(clips: ClipData[]): TileEntry[] {
-  const total = clips.length;
-  const cols = GRID_COLS;
-  const rows = Math.ceil(total / cols);
-  const gridW = cols * TILE_SPACING;
-  const gridH = rows * TILE_SPACING;
-  const tiles: TileEntry[] = [];
-
-  for (let i = 0; i < total; i++) {
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    tiles.push({
-      tileIndex: i,
-      clip: clips[i],
-      worldX: col * TILE_SPACING - gridW / 2 + TILE_SPACING / 2,
-      worldY: -(row * TILE_SPACING - gridH / 2 + TILE_SPACING / 2),
-    });
-  }
-  return tiles;
+// One mounted lattice cell. `key` ("gx:gy") is the cell's identity — the same clip can appear in
+// many cells once the grid wraps, so identity is positional, not clip-based.
+interface CellEntry {
+  key: string;
+  clip: ClipData;
+  worldX: number;
+  worldY: number;
 }
 
-// Tiles within RENDER_CHUNKS of the camera chunk are mounted/painted.
-function computeVisible(tiles: TileEntry[]): TileEntry[] {
-  const cx = Math.round(cameraState.pos.x / CHUNK_SIZE);
-  const cy = Math.round(cameraState.pos.y / CHUNK_SIZE);
-  return tiles.filter((t) => {
-    const tcx = Math.round(t.worldX / CHUNK_SIZE);
-    const tcy = Math.round(t.worldY / CHUNK_SIZE);
-    return Math.max(Math.abs(tcx - cx), Math.abs(tcy - cy)) <= RENDER_CHUNKS;
-  });
+interface Bounds {
+  gxMin: number;
+  gxMax: number;
+  gyMin: number;
+  gyMax: number;
 }
 
-// The PLAY_COUNT visible tiles closest to the camera get a real <video>; the rest stay posters.
-function computePlaySet(visible: TileEntry[]): Set<number> {
-  if (PLAY_COUNT <= 0) return new Set();
-  const px = cameraState.pos.x;
-  const py = cameraState.pos.y;
-  return new Set(
-    visible
-      .map((t) => ({ i: t.tileIndex, d: (t.worldX - px) ** 2 + (t.worldY - py) ** 2 }))
-      .sort((a, b) => a.d - b.d)
-      .slice(0, PLAY_COUNT)
-      .map((e) => e.i)
-  );
-}
-
+// Recompute the play set once the camera drifts half a tile from where it was last computed.
 const PLAY_RECOMPUTE_DIST_SQ = (TILE_SPACING * 0.5) ** 2;
 
 export function Grid({ clips }: GridProps) {
-  const tiles = React.useMemo(() => buildTiles(clips), [clips]);
-  const [visibleSet, setVisibleSet] = React.useState<Set<number>>(new Set());
-  const [playSet, setPlaySet] = React.useState<Set<number>>(new Set());
+  const { camera, size } = useThree();
+  const total = clips.length;
+  const cols = GRID_COLS;
+  const rows = Math.max(1, Math.ceil(total / cols));
 
-  // Refs let the frame loop recompute without depending on React state snapshots.
-  const visibleTilesRef = React.useRef<TileEntry[]>([]);
-  const lastChunkKey = React.useRef("");
+  // Map an infinite lattice cell to a clip by wrapping into the base cols×rows block.
+  // `% total` fills the partial last row so every cell resolves to a video (no white space).
+  const clipAt = React.useCallback(
+    (gx: number, gy: number): ClipData => {
+      const localCol = ((gx % cols) + cols) % cols;
+      const localRow = ((gy % rows) + rows) % rows;
+      return clips[(localRow * cols + localCol) % total];
+    },
+    [clips, total, cols, rows]
+  );
+
+  // Integer cell bounds covering the camera frustum (at the current z) plus a margin ring.
+  const computeBounds = React.useCallback((): Bounds => {
+    const fovRad = (camera as THREE.PerspectiveCamera).fov * (Math.PI / 180);
+    const halfH = Math.abs(cameraState.pos.z) * Math.tan(fovRad / 2);
+    const aspect = size.width / Math.max(1, size.height);
+    const halfW = halfH * aspect;
+    const m = VISIBLE_MARGIN_TILES;
+    return {
+      gxMin: Math.floor((cameraState.pos.x - halfW) / TILE_SPACING) - m,
+      gxMax: Math.ceil((cameraState.pos.x + halfW) / TILE_SPACING) + m,
+      gyMin: Math.floor((cameraState.pos.y - halfH) / TILE_SPACING) - m,
+      gyMax: Math.ceil((cameraState.pos.y + halfH) / TILE_SPACING) + m,
+    };
+  }, [camera, size]);
+
+  const buildCells = React.useCallback(
+    (b: Bounds): CellEntry[] => {
+      const out: CellEntry[] = [];
+      for (let gy = b.gyMin; gy <= b.gyMax; gy++) {
+        for (let gx = b.gxMin; gx <= b.gxMax; gx++) {
+          out.push({
+            key: `${gx}:${gy}`,
+            clip: clipAt(gx, gy),
+            worldX: gx * TILE_SPACING,
+            worldY: gy * TILE_SPACING,
+          });
+        }
+      }
+      return out;
+    },
+    [clipAt]
+  );
+
+  // The PLAY_COUNT cells nearest the camera get a real <video>; the rest stay posters.
+  const computePlaySet = React.useCallback((list: CellEntry[]): Set<string> => {
+    if (PLAY_COUNT <= 0) return new Set();
+    const px = cameraState.pos.x;
+    const py = cameraState.pos.y;
+    return new Set(
+      list
+        .map((c) => ({ k: c.key, d: (c.worldX - px) ** 2 + (c.worldY - py) ** 2 }))
+        .sort((a, b) => a.d - b.d)
+        .slice(0, PLAY_COUNT)
+        .map((e) => e.k)
+    );
+  }, []);
+
+  const [cells, setCells] = React.useState<CellEntry[]>([]);
+  const [playSet, setPlaySet] = React.useState<Set<string>>(new Set());
+
+  const lastBounds = React.useRef<Bounds>({ gxMin: NaN, gxMax: NaN, gyMin: NaN, gyMax: NaN });
   const lastPlayPos = React.useRef({ x: Number.POSITIVE_INFINITY, y: Number.POSITIVE_INFINITY });
 
-  // Seed visible/play sets from the camera's starting position.
+  // Seed (and re-seed on resize / clip-set change) from the camera's current position.
   React.useEffect(() => {
-    const vis = computeVisible(tiles);
-    visibleTilesRef.current = vis;
-    lastChunkKey.current = `${Math.round(cameraState.pos.x / CHUNK_SIZE)},${Math.round(cameraState.pos.y / CHUNK_SIZE)}`;
+    const b = computeBounds();
+    lastBounds.current = b;
+    const list = buildCells(b);
     lastPlayPos.current = { x: cameraState.pos.x, y: cameraState.pos.y };
-    setVisibleSet(new Set(vis.map((t) => t.tileIndex)));
-    setPlaySet(computePlaySet(vis));
-  }, [tiles]);
+    setCells(list);
+    setPlaySet(computePlaySet(list));
+  }, [computeBounds, buildCells, computePlaySet]);
 
   useFrame(() => {
-    const cx = Math.round(cameraState.pos.x / CHUNK_SIZE);
-    const cy = Math.round(cameraState.pos.y / CHUNK_SIZE);
-    const chunkKey = `${cx},${cy}`;
+    const b = computeBounds();
+    const lb = lastBounds.current;
+    const boundsChanged =
+      b.gxMin !== lb.gxMin || b.gxMax !== lb.gxMax || b.gyMin !== lb.gyMin || b.gyMax !== lb.gyMax;
 
-    let visibleChanged = false;
-    if (chunkKey !== lastChunkKey.current) {
-      lastChunkKey.current = chunkKey;
-      const vis = computeVisible(tiles);
-      visibleTilesRef.current = vis;
-      setVisibleSet(new Set(vis.map((t) => t.tileIndex)));
-      visibleChanged = true;
+    let list = cells;
+    if (boundsChanged) {
+      lastBounds.current = b;
+      list = buildCells(b);
+      setCells(list);
     }
 
     const dx = cameraState.pos.x - lastPlayPos.current.x;
     const dy = cameraState.pos.y - lastPlayPos.current.y;
-    if (visibleChanged || dx * dx + dy * dy > PLAY_RECOMPUTE_DIST_SQ) {
+    if (boundsChanged || dx * dx + dy * dy > PLAY_RECOMPUTE_DIST_SQ) {
       lastPlayPos.current = { x: cameraState.pos.x, y: cameraState.pos.y };
-      setPlaySet(computePlaySet(visibleTilesRef.current));
+      setPlaySet(computePlaySet(list));
     }
   });
 
+  if (!total) return <group />;
+
   return (
     <group>
-      {tiles
-        .filter((t) => visibleSet.has(t.tileIndex))
-        .map((t) => (
-          <Tile
-            key={t.tileIndex}
-            tileIndex={t.tileIndex}
-            clip={t.clip}
-            position={[t.worldX, t.worldY, 0]}
-            inPlayRadius={playSet.has(t.tileIndex)}
-          />
-        ))}
+      {cells.map((c) => (
+        <Tile
+          key={c.key}
+          tileKey={c.key}
+          clip={c.clip}
+          position={[c.worldX, c.worldY, 0]}
+          inPlayRadius={playSet.has(c.key)}
+        />
+      ))}
     </group>
   );
 }
