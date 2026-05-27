@@ -43,6 +43,17 @@ export function Chrome({ clips }: ChromeProps) {
 
   return (
     <div className="fixed inset-0 pointer-events-none select-none" style={{ fontFamily: "Inter, system-ui, sans-serif" }}>
+      {/* White bands behind the corner text so it stays legible over any video.
+          Painted first (and pointer-events-none) so text sits on top and panning still works. */}
+      <div
+        className="absolute top-0 left-0 right-0"
+        style={{ height: 72, background: "linear-gradient(to bottom, #ffffff 0%, #ffffff 58%, rgba(255,255,255,0) 100%)" }}
+      />
+      <div
+        className="absolute bottom-0 left-0 right-0"
+        style={{ height: 72, background: "linear-gradient(to top, #ffffff 0%, #ffffff 58%, rgba(255,255,255,0) 100%)" }}
+      />
+
       {/* Site headline — top left */}
       <div className="absolute top-6 left-6">
         <span style={{ fontSize: 13, letterSpacing: "0.18em", color: "rgba(0,0,0,0.55)", fontWeight: 500, textTransform: "uppercase" }}>
