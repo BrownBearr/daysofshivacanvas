@@ -30,6 +30,20 @@ export function setRequestRender(fn: () => void) {
   requestRender = fn;
 }
 
+// Tiles subscribe so a focused tile can keep playing (with audio) regardless of hover state, and
+// disarm cleanly on unfocus — focus lives in this mutable object, not React state, so without a
+// notification a tile that loses focus from Esc / click-elsewhere would never hear about it.
+const focusListeners = new Set<() => void>();
+export function subscribeFocus(fn: () => void): () => void {
+  focusListeners.add(fn);
+  return () => {
+    focusListeners.delete(fn);
+  };
+}
+function notifyFocus(): void {
+  for (const fn of focusListeners) fn();
+}
+
 export function focusTile(tileId: string, x: number, y: number, z: number, clipName: string) {
   cameraState.preFocusTarget.copy(cameraState.animTarget);
   cameraState.focusedTileId = tileId;
@@ -39,6 +53,7 @@ export function focusTile(tileId: string, x: number, y: number, z: number, clipN
   cameraState.isAnimatingFocus = true;
   cameraState.vel.set(0, 0, 0);
   cameraState.targetVel.set(0, 0, 0);
+  notifyFocus();
   requestRender();
 }
 
@@ -51,5 +66,6 @@ export function unfocusTile() {
   cameraState.isAnimatingFocus = true;
   cameraState.vel.set(0, 0, 0);
   cameraState.targetVel.set(0, 0, 0);
+  notifyFocus();
   requestRender();
 }

@@ -13,7 +13,6 @@ interface ChromeProps {
 const BAR_H = 60;
 const DENOM_BASE = 1733;
 const DENOM_ANCHOR = new Date(2026, 4, 25);
-const VOLUME_STEPS = [1.0, 0.75, 0.5, 0.25, 0.0];
 const ICON_SIZE = 22;
 
 function denominatorForToday(): number {
@@ -103,17 +102,12 @@ export function Chrome({ clips, darkMode, onToggleDark }: ChromeProps) {
     setMuted(muteState.muted);
   }
 
-  function stepVolume() {
-    const idx = VOLUME_STEPS.findIndex((v) => Math.abs(v - muteState.volume) < 0.01);
-    const next = VOLUME_STEPS[(idx + 1) % VOLUME_STEPS.length];
-    muteState.volume = next;
-    videoPool.setAllVolume(next);
-    setVolume(next);
-    // Sync mute state with volume edge cases
-    if (next === 0 && !muteState.muted) {
-      muteState.muted = true;
-      setMuted(true);
-    } else if (next > 0 && muteState.muted) {
+  function changeVolume(v: number) {
+    muteState.volume = v;
+    videoPool.setAllVolume(v);
+    setVolume(v);
+    // Dragging above 0 should be audible, so clear mute if it was on.
+    if (v > 0 && muteState.muted) {
       muteState.muted = false;
       setMuted(false);
     }
@@ -122,11 +116,15 @@ export function Chrome({ clips, darkMode, onToggleDark }: ChromeProps) {
   const bg = darkMode ? "#121212" : "#ffffff";
   const text = darkMode ? "#ffffff" : "#000000";
   const textDim = darkMode ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.45)";
+  const trackDim = darkMode ? "rgba(255,255,255,0.20)" : "rgba(0,0,0,0.15)";
   const helpBg = darkMode ? "rgba(22,22,22,0.97)" : "rgba(255,255,255,0.97)";
   const helpBorder = darkMode ? "rgba(255,255,255,0.09)" : "rgba(0,0,0,0.08)";
 
   const activeName = focusedName ?? hoveredName;
   const denom = denominatorForToday();
+  // Icon reflects audible state: muted or zeroed both read as silent.
+  const effVol = muted ? 0 : volume;
+  const fillPct = Math.round(volume * 100);
 
   return (
     <div
@@ -146,9 +144,25 @@ export function Chrome({ clips, darkMode, onToggleDark }: ChromeProps) {
           <button onClick={onToggleDark} style={iconBtnStyle} aria-label={darkMode ? "Light mode" : "Dark mode"}>
             {darkMode ? <SunIcon /> : <MoonIcon />}
           </button>
-          <button onClick={stepVolume} style={iconBtnStyle} aria-label="Cycle volume">
-            <VolumeIcon volume={volume} />
-          </button>
+          <div className="flex items-center" style={{ gap: 9, color: text }}>
+            <span style={{ display: "flex", alignItems: "center" }} aria-hidden="true">
+              <VolumeIcon volume={effVol} />
+            </span>
+            <input
+              type="range"
+              className="vol-slider"
+              min={0}
+              max={1}
+              step={0.01}
+              value={volume}
+              onChange={(e) => changeVolume(Number.parseFloat(e.target.value))}
+              aria-label="Volume"
+              style={{
+                width: 76,
+                background: `linear-gradient(to right, ${text} ${fillPct}%, ${trackDim} ${fillPct}%)`,
+              }}
+            />
+          </div>
           <button
             onClick={toggleMute}
             style={{ ...iconBtnStyle, fontSize: 16, fontWeight: 600, letterSpacing: "0.04em" }}
