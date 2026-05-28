@@ -2,7 +2,7 @@ import * as React from "react";
 import * as THREE from "three";
 import { useFrame, useThree } from "@react-three/fiber";
 import type { ClipData } from "../types";
-import { GRID_COLS, TILE_SPACING, PLAY_COUNT, VISIBLE_MARGIN_TILES } from "../theme";
+import { GRID_COLS, TILE_SPACING, VISIBLE_MARGIN_TILES } from "../theme";
 import { cameraState } from "./camera-state";
 import { Tile } from "./Tile";
 
@@ -10,8 +10,6 @@ interface GridProps {
   clips: ClipData[];
 }
 
-// One mounted lattice cell. `key` ("gx:gy") is the cell's identity — the same clip can appear in
-// many cells once the grid wraps, so identity is positional, not clip-based.
 interface CellEntry {
   key: string;
   clip: ClipData;
@@ -26,20 +24,12 @@ interface Bounds {
   gyMax: number;
 }
 
-// Recompute the play set once the camera drifts half a tile from where it was last computed.
-const PLAY_RECOMPUTE_DIST_SQ = (TILE_SPACING * 0.5) ** 2;
-// Defer the play-set (the tiles that actually decode video) until the camera settles, so flinging
-// across the canvas doesn't kick off and instantly abort dozens of video loads (decoder thrash).
-const PLAY_SETTLE_MS = 120;
-
 export function Grid({ clips }: GridProps) {
   const { camera, size } = useThree();
   const total = clips.length;
   const cols = GRID_COLS;
   const rows = Math.max(1, Math.ceil(total / cols));
 
-  // Map an infinite lattice cell to a clip by wrapping into the base cols×rows block.
-  // `% total` fills the partial last row so every cell resolves to a video (no white space).
   const clipAt = React.useCallback(
     (gx: number, gy: number): ClipData => {
       const localCol = ((gx % cols) + cols) % cols;
@@ -49,7 +39,6 @@ export function Grid({ clips }: GridProps) {
     [clips, total, cols, rows]
   );
 
-  // Integer cell bounds covering the camera frustum (at the current z) plus a margin ring.
   const computeBounds = React.useCallback((): Bounds => {
     const fovRad = (camera as THREE.PerspectiveCamera).fov * (Math.PI / 180);
     const halfH = Math.abs(cameraState.pos.z) * Math.tan(fovRad / 2);
@@ -82,76 +71,24 @@ export function Grid({ clips }: GridProps) {
     [clipAt]
   );
 
-  // The PLAY_COUNT cells nearest the camera get a real <video>; the rest stay posters.
-  const computePlaySet = React.useCallback((list: CellEntry[]): Set<string> => {
-    if (PLAY_COUNT <= 0) return new Set();
-    const px = cameraState.pos.x;
-    const py = cameraState.pos.y;
-    return new Set(
-      list
-        .map((c) => ({ k: c.key, d: (c.worldX - px) ** 2 + (c.worldY - py) ** 2 }))
-        .sort((a, b) => a.d - b.d)
-        .slice(0, PLAY_COUNT)
-        .map((e) => e.k)
-    );
-  }, []);
-
   const [cells, setCells] = React.useState<CellEntry[]>([]);
-  const [playSet, setPlaySet] = React.useState<Set<string>>(new Set());
-
-  // Mirrors the latest `cells` so the debounced timer reads fresh data without re-subscribing.
-  const cellsRef = React.useRef<CellEntry[]>([]);
-  const playTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const lastBounds = React.useRef<Bounds>({ gxMin: NaN, gxMax: NaN, gyMin: NaN, gyMax: NaN });
-  const lastPlayPos = React.useRef({ x: Number.POSITIVE_INFINITY, y: Number.POSITIVE_INFINITY });
 
-  // Recompute the play set only once the camera has been still for PLAY_SETTLE_MS (trailing edge).
-  const schedulePlaySet = React.useCallback(() => {
-    if (playTimerRef.current !== null) clearTimeout(playTimerRef.current);
-    playTimerRef.current = setTimeout(() => {
-      playTimerRef.current = null;
-      setPlaySet(computePlaySet(cellsRef.current));
-    }, PLAY_SETTLE_MS);
-  }, [computePlaySet]);
-
-  // Seed (and re-seed on resize / clip-set change) from the camera's current position.
+  // Seed cells on mount and whenever the clip set or camera projection changes.
   React.useEffect(() => {
     const b = computeBounds();
     lastBounds.current = b;
-    const list = buildCells(b);
-    cellsRef.current = list;
-    lastPlayPos.current = { x: cameraState.pos.x, y: cameraState.pos.y };
-    setCells(list);
-    setPlaySet(computePlaySet(list)); // immediate on first paint so video shows without a 120ms gap
-  }, [computeBounds, buildCells, computePlaySet]);
+    setCells(buildCells(b));
+  }, [computeBounds, buildCells]);
 
-  // Cancel any pending debounce on unmount.
-  React.useEffect(
-    () => () => {
-      if (playTimerRef.current !== null) clearTimeout(playTimerRef.current);
-    },
-    []
-  );
-
+  // Update the visible cell set as the camera moves — no play-set tracking needed since
+  // video decode is driven entirely by hover/focus, not proximity.
   useFrame(() => {
     const b = computeBounds();
     const lb = lastBounds.current;
-    const boundsChanged =
-      b.gxMin !== lb.gxMin || b.gxMax !== lb.gxMax || b.gyMin !== lb.gyMin || b.gyMax !== lb.gyMax;
-
-    if (boundsChanged) {
+    if (b.gxMin !== lb.gxMin || b.gxMax !== lb.gxMax || b.gyMin !== lb.gyMin || b.gyMax !== lb.gyMax) {
       lastBounds.current = b;
-      const list = buildCells(b);
-      cellsRef.current = list;
-      setCells(list); // cells track the camera immediately — no white space at edges
-    }
-
-    const dx = cameraState.pos.x - lastPlayPos.current.x;
-    const dy = cameraState.pos.y - lastPlayPos.current.y;
-    if (boundsChanged || dx * dx + dy * dy > PLAY_RECOMPUTE_DIST_SQ) {
-      lastPlayPos.current = { x: cameraState.pos.x, y: cameraState.pos.y };
-      schedulePlaySet(); // debounced — video swaps wait for the camera to settle
+      setCells(buildCells(b));
     }
   });
 
@@ -166,7 +103,6 @@ export function Grid({ clips }: GridProps) {
           clip={c.clip}
           x={c.worldX}
           y={c.worldY}
-          inPlayRadius={playSet.has(c.key)}
         />
       ))}
     </group>

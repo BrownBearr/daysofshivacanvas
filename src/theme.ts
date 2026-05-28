@@ -25,9 +25,7 @@ export const IS_MOBILE =
     (typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches));
 
 // Video pool
-// Browsers can only smoothly decode a handful of <video> elements at once, so the pool is
-// small. PLAY_COUNT tiles auto-play (the ones nearest the camera); everything else stays a
-// static poster. Set PLAY_COUNT = 0 for pure hover/click-only playback.
-// Mobile gets a smaller pool + fewer simultaneous decodes to avoid jank and decode stalls.
-export const POOL_SIZE = IS_MOBILE ? 6 : 12;
-export const PLAY_COUNT = IS_MOBILE ? 4 : 9;
+// Tiles are static posters until hovered; only hover + focused tiles decode video, so the pool
+// only needs to cover simultaneous hover transitions (1-2) plus one focused tile.
+// Mobile gets a smaller pool since hover is disabled on touch.
+export const POOL_SIZE = IS_MOBILE ? 2 : 4;

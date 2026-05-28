@@ -18,8 +18,6 @@ interface TileProps {
   // by value — a cell keeps the same x/y across grid rebuilds, so it never re-renders while panning.
   x: number;
   y: number;
-  // True when this tile is among the camera's nearest tiles and should auto-play.
-  inPlayRadius: boolean;
 }
 
 // Per-frame texture upload is the dominant cost of an active video, so we only push a new
@@ -104,7 +102,7 @@ function loadPoster(url: string): Promise<THREE.Texture> {
 // Memoized: during a pan, Grid rebuilds the cell list every tile-boundary crossing, but a given
 // cell's props (clip ref, x, y, inPlayRadius) are unchanged, so memo skips re-rendering it — only
 // the ring of entering/exiting tiles does any work.
-export const Tile = React.memo(function Tile({ tileKey, clip, x, y, inPlayRadius }: TileProps) {
+export const Tile = React.memo(function Tile({ tileKey, clip, x, y }: TileProps) {
   const { camera, invalidate } = useThree();
   const matRef = React.useRef<THREE.MeshBasicMaterial>(null);
   const videoTexRef = React.useRef<THREE.VideoTexture | null>(null);
@@ -116,8 +114,8 @@ export const Tile = React.memo(function Tile({ tileKey, clip, x, y, inPlayRadius
   const posterTexRef = React.useRef<THREE.Texture | null>(null);
   posterTexRef.current = posterTex;
 
-  // A tile plays real video when it's near the camera OR being hovered.
-  const shouldPlay = inPlayRadius || hovered;
+  // A tile plays real video only when hovered (or focused, which also sets hovered via the pool).
+  const shouldPlay = hovered;
   const shouldPlayRef = React.useRef(shouldPlay);
   shouldPlayRef.current = shouldPlay;
   // Tracks focus edges so the frame loop can swap preview<->source exactly on transition.
