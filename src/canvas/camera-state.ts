@@ -17,9 +17,18 @@ export const cameraState = {
   isAnimatingFocus: false,
   preFocusTarget: new THREE.Vector3(0, 0, INITIAL_CAM_Z),
   hoveredTileId: null as string | null,
+  hoveredClipName: null as string | null,
   lastTouchPos: { x: 0, y: 0 },
   lastTouchDist: 0,
 };
+
+// Set by the R3F CameraController. Focus/unfocus start a camera animation from React event handlers
+// (click, Esc, onPointerMissed) that run outside the render loop, so under the demand frameloop they
+// must kick a render or the damp animation would never advance.
+let requestRender: () => void = () => {};
+export function setRequestRender(fn: () => void) {
+  requestRender = fn;
+}
 
 export function focusTile(tileId: string, x: number, y: number, z: number, clipName: string) {
   cameraState.preFocusTarget.copy(cameraState.animTarget);
@@ -30,6 +39,7 @@ export function focusTile(tileId: string, x: number, y: number, z: number, clipN
   cameraState.isAnimatingFocus = true;
   cameraState.vel.set(0, 0, 0);
   cameraState.targetVel.set(0, 0, 0);
+  requestRender();
 }
 
 export function unfocusTile() {
@@ -41,4 +51,5 @@ export function unfocusTile() {
   cameraState.isAnimatingFocus = true;
   cameraState.vel.set(0, 0, 0);
   cameraState.targetVel.set(0, 0, 0);
+  requestRender();
 }

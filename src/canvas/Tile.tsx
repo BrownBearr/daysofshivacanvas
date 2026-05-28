@@ -3,7 +3,7 @@ import * as THREE from "three";
 import { useThree, useFrame } from "@react-three/fiber";
 import { useSpring, animated } from "@react-spring/three";
 import type { ClipData } from "../types";
-import { TILE_W, TILE_H, MIN_CAM_Z } from "../theme";
+import { TILE_W, TILE_H, MIN_CAM_Z, IS_MOBILE } from "../theme";
 import { videoPool } from "../lib/video-pool";
 import { sourceUrl, previewUrl, posterUrl } from "../lib/clip-source";
 import { cameraState, focusTile, unfocusTile } from "./camera-state";
@@ -14,7 +14,10 @@ interface TileProps {
   // since the same clip can appear in many cells once the grid wraps.
   tileKey: string;
   clip: ClipData;
-  position: [number, number, number];
+  // World position split into primitives (not a [x,y,z] array) so the memoized Tile compares props
+  // by value — a cell keeps the same x/y across grid rebuilds, so it never re-renders while panning.
+  x: number;
+  y: number;
   // True when this tile is among the camera's nearest tiles and should auto-play.
   inPlayRadius: boolean;
 }
@@ -27,7 +30,36 @@ type RVFCVideo = HTMLVideoElement & {
 };
 
 const textureLoader = new THREE.TextureLoader();
+
+// Every tile is the same 1.4×1.4 plane, so they all share one geometry instead of allocating a
+// BufferGeometry per mounted cell (~135 when zoomed out).
+const TILE_GEOMETRY = new THREE.PlaneGeometry(TILE_W, TILE_H);
+
+// Poster textures are cached across tiles and across pans. Map insertion order = recency (LRU); the
+// cap bounds GPU memory so panning the wrapped lattice can't retain all ~566 posters for the session.
+const POSTER_CACHE_CAP = IS_MOBILE ? 96 : 256;
 const posterCache = new Map<string, THREE.Texture>();
+
+function getCachedPoster(url: string): THREE.Texture | undefined {
+  const tex = posterCache.get(url);
+  if (tex) {
+    // Move to most-recent.
+    posterCache.delete(url);
+    posterCache.set(url, tex);
+  }
+  return tex;
+}
+
+function setCachedPoster(url: string, tex: THREE.Texture): void {
+  posterCache.set(url, tex);
+  while (posterCache.size > POSTER_CACHE_CAP) {
+    const oldest = posterCache.keys().next().value;
+    if (oldest === undefined) break;
+    const evicted = posterCache.get(oldest);
+    posterCache.delete(oldest);
+    evicted?.dispose();
+  }
+}
 
 // "cover" crop: fill a 1×1 square from any aspect ratio by trimming the longer axis
 function applySquareCrop(tex: THREE.Texture, nativeW: number, nativeH: number) {
@@ -46,7 +78,7 @@ function applySquareCrop(tex: THREE.Texture, nativeW: number, nativeH: number) {
 }
 
 function loadPoster(url: string): Promise<THREE.Texture> {
-  const cached = posterCache.get(url);
+  const cached = getCachedPoster(url);
   if (cached) return Promise.resolve(cached);
   return new Promise((resolve) => {
     textureLoader.load(
@@ -55,22 +87,25 @@ function loadPoster(url: string): Promise<THREE.Texture> {
         t.colorSpace = THREE.SRGBColorSpace;
         const img = t.image as HTMLImageElement;
         applySquareCrop(t, img.naturalWidth, img.naturalHeight);
-        posterCache.set(url, t);
+        setCachedPoster(url, t);
         resolve(t);
       },
       undefined,
       () => {
         const fallback = new THREE.DataTexture(new Uint8Array([210, 210, 210, 255]), 1, 1);
         fallback.needsUpdate = true;
-        posterCache.set(url, fallback);
+        setCachedPoster(url, fallback);
         resolve(fallback);
       }
     );
   });
 }
 
-export function Tile({ tileKey, clip, position, inPlayRadius }: TileProps) {
-  const { camera } = useThree();
+// Memoized: during a pan, Grid rebuilds the cell list every tile-boundary crossing, but a given
+// cell's props (clip ref, x, y, inPlayRadius) are unchanged, so memo skips re-rendering it — only
+// the ring of entering/exiting tiles does any work.
+export const Tile = React.memo(function Tile({ tileKey, clip, x, y, inPlayRadius }: TileProps) {
+  const { camera, invalidate } = useThree();
   const matRef = React.useRef<THREE.MeshBasicMaterial>(null);
   const videoTexRef = React.useRef<THREE.VideoTexture | null>(null);
   const videoElRef = React.useRef<HTMLVideoElement | null>(null);
@@ -111,6 +146,7 @@ export function Tile({ tileKey, clip, position, inPlayRadius }: TileProps) {
       if (matRef.current) {
         matRef.current.map = posterTexRef.current;
         matRef.current.needsUpdate = true;
+        invalidate(); // imperative map change won't auto-invalidate under demand mode
       }
       return;
     }
@@ -149,6 +185,9 @@ export function Tile({ tileKey, clip, position, inPlayRadius }: TileProps) {
           matRef.current.map = tex;
           matRef.current.needsUpdate = true;
         }
+        // Demand frameloop: a decoded frame is new content, so request a render. RVFC fires
+        // independently of R3F, so this keeps playing tiles rendering at video framerate.
+        invalidate();
         rvfcHandle = el.requestVideoFrameCallback!(onFrame);
       };
       rvfcHandle = el.requestVideoFrameCallback!(onFrame);
@@ -162,14 +201,16 @@ export function Tile({ tileKey, clip, position, inPlayRadius }: TileProps) {
       videoElRef.current = null;
       videoReadyRef.current = false;
     };
-  }, [shouldPlay, tileKey, clip]);
+  }, [shouldPlay, tileKey, clip, invalidate]);
 
   // Apply poster once loaded (unless the video is already showing its frames)
   React.useEffect(() => {
     if (!posterTex || !matRef.current || videoReadyRef.current) return;
     matRef.current.map = posterTex;
     matRef.current.needsUpdate = true;
-  }, [posterTex]);
+    // The fade loop has gone idle waiting for this async poster — kick a frame so it fades in.
+    invalidate();
+  }, [posterTex, invalidate]);
 
   const isFocused = () => cameraState.focusedTileId === tileKey;
 
@@ -182,7 +223,7 @@ export function Tile({ tileKey, clip, position, inPlayRadius }: TileProps) {
     } else {
       const fovRad = (camera as THREE.PerspectiveCamera).fov * (Math.PI / 180);
       const fitZ = (TILE_W * 1.2) / (2 * Math.tan(fovRad / 2));
-      focusTile(tileKey, position[0], position[1], Math.max(fitZ, MIN_CAM_Z), clip.name);
+      focusTile(tileKey, x, y, Math.max(fitZ, MIN_CAM_Z), clip.name);
       // If a video element is already bound, upgrade to the full source and unmute now,
       // inside the user gesture. Otherwise the frame loop swaps it in once the tile
       // becomes the camera's nearest tile (it will, since we zoom to it).
@@ -196,8 +237,11 @@ export function Tile({ tileKey, clip, position, inPlayRadius }: TileProps) {
   };
 
   const { scale } = useSpring({
-    scale: hovered && !cameraState.isDragging && !isFocused() ? 1.3 : 1.0,
-    config: { tension: 280, friction: 26 },
+    // No hover scale on mobile (touch has no real hover; it just causes jank during pans).
+    scale: !IS_MOBILE && hovered && !cameraState.isDragging && !isFocused() ? 1.3 : 1.0,
+    config: { tension: 380, friction: 16 },
+    // Under demand frameloop react-spring won't render itself; drive R3F each animation step.
+    onChange: () => invalidate(),
   });
 
   useFrame(() => {
@@ -233,9 +277,11 @@ export function Tile({ tileKey, clip, position, inPlayRadius }: TileProps) {
     // Keep focused clip's muted state in sync with the global mute toggle.
     if (el && focused) el.muted = muteState.muted;
 
-    // Fallback frame pump when requestVideoFrameCallback is unavailable.
+    // Fallback frame pump when requestVideoFrameCallback is unavailable. This runs inside useFrame,
+    // so it must self-sustain the demand loop while the video plays.
     if (!usesRVFCRef.current && tex && el && !el.paused && el.readyState >= 2) {
       tex.needsUpdate = true;
+      invalidate();
       if (!videoReadyRef.current) {
         videoReadyRef.current = true;
         mat.map = tex;
@@ -247,31 +293,48 @@ export function Tile({ tileKey, clip, position, inPlayRadius }: TileProps) {
     const targetOpacity = hasContent ? 1 : 0;
     if (Math.abs(mat.opacity - targetOpacity) > 0.001) {
       mat.opacity += (targetOpacity - mat.opacity) * 0.12;
+      // Keep rendering until the fade settles.
+      invalidate();
     }
   });
 
   return (
     <animated.mesh
-      position={position}
+      position={[x, y, 0]}
       scale={scale}
-      onPointerOver={(e) => {
-        e.stopPropagation();
-        setHovered(true);
-        cameraState.hoveredTileId = tileKey;
-        document.body.style.cursor = "pointer";
-      }}
-      onPointerOut={() => {
-        setHovered(false);
-        if (cameraState.hoveredTileId === tileKey) cameraState.hoveredTileId = null;
-        document.body.style.cursor = "";
-      }}
+      geometry={TILE_GEOMETRY}
+      // Hover handlers only on non-touch: on mobile they'd fire on every tile the finger drags over,
+      // churning state + raycasts. Omitting them leaves only onClick (raycast on tap), so panning is
+      // just panning, a tap focuses, and a second tap unfocuses.
+      onPointerOver={
+        IS_MOBILE
+          ? undefined
+          : (e) => {
+              e.stopPropagation();
+              setHovered(true);
+              cameraState.hoveredTileId = tileKey;
+              cameraState.hoveredClipName = clip.name;
+              document.body.style.cursor = "pointer";
+            }
+      }
+      onPointerOut={
+        IS_MOBILE
+          ? undefined
+          : () => {
+              setHovered(false);
+              if (cameraState.hoveredTileId === tileKey) {
+                cameraState.hoveredTileId = null;
+                cameraState.hoveredClipName = null;
+              }
+              document.body.style.cursor = "";
+            }
+      }
       onClick={handleClick}
     >
-      <planeGeometry args={[TILE_W, TILE_H]} />
       {/* map is managed imperatively (poster vs. video) via the effects/frame loop;
           binding it here would let R3F re-apply the poster on every re-render and
           clobber the active VideoTexture. */}
       <meshBasicMaterial ref={matRef} toneMapped={false} transparent opacity={0} />
     </animated.mesh>
   );
-}
+});

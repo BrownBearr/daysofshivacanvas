@@ -1,8 +1,8 @@
 import * as React from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { damp3 } from "maath/easing";
-import { BG_COLOR, INITIAL_CAM_Z, MIN_CAM_Z, MAX_CAM_Z, IS_MOBILE } from "../theme";
-import { cameraState, unfocusTile } from "./camera-state";
+import { INITIAL_CAM_Z, MIN_CAM_Z, MAX_CAM_Z, IS_MOBILE } from "../theme";
+import { cameraState, unfocusTile, setRequestRender } from "./camera-state";
 import { Grid } from "./Grid";
 import type { ClipData } from "../types";
 
@@ -17,6 +17,8 @@ const TOUCH_CLICK_THRESHOLD = 15;
 // maath damp3 smoothTime: approximate seconds to reach target — smaller = snappier (tune for feel)
 const FOCUS_SMOOTH_TIME = 0.22;
 const UNFOCUS_SMOOTH_TIME = 0.18;
+// Below this, free-nav velocity/scroll is treated as settled and the demand loop stops requesting frames.
+const MOTION_EPS = 1e-4;
 
 function getTouchDistance(touches: TouchList): number {
   if (touches.length < 2) return 0;
@@ -26,10 +28,12 @@ function getTouchDistance(touches: TouchList): number {
 }
 
 function CameraController() {
-  const { camera } = useThree();
+  const { camera, invalidate } = useThree();
   const maxDragDist = React.useRef(0);
 
   React.useEffect(() => {
+    // Let focus/unfocus (fired from React handlers outside the loop) kick the demand frameloop.
+    setRequestRender(invalidate);
     const body = document.body;
 
     const onMouseDown = (e: MouseEvent) => {
@@ -51,6 +55,7 @@ function CameraController() {
         cameraState.targetVel.x -= dx * DRAG_SENSITIVITY;
         cameraState.targetVel.y += dy * DRAG_SENSITIVITY;
         cameraState.lastMouse = { x: e.clientX, y: e.clientY };
+        invalidate();
       }
     };
 
@@ -64,10 +69,14 @@ function CameraController() {
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       cameraState.scrollAccum += e.deltaY * SCROLL_SENSITIVITY;
+      invalidate();
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") unfocusTile();
+      if (e.key === "Escape") {
+        unfocusTile();
+        invalidate();
+      }
     };
 
     const onTouchStart = (e: TouchEvent) => {
@@ -98,6 +107,7 @@ function CameraController() {
         cameraState.scrollAccum += (cameraState.lastTouchDist - dist) * SCROLL_SENSITIVITY;
         cameraState.lastTouchDist = dist;
       }
+      invalidate();
     };
 
     const onTouchEnd = () => { setTimeout(() => { cameraState.isDragging = false; }, 0); };
@@ -146,6 +156,17 @@ function CameraController() {
 
       cameraState.animTarget.copy(cameraState.pos);
       camera.position.set(cameraState.pos.x, cameraState.pos.y, cameraState.pos.z);
+
+      // Demand frameloop: keep rendering only while there's residual motion (inertia tail / scroll).
+      const v = cameraState.vel;
+      const tv = cameraState.targetVel;
+      if (
+        Math.abs(v.x) > MOTION_EPS || Math.abs(v.y) > MOTION_EPS || Math.abs(v.z) > MOTION_EPS ||
+        Math.abs(tv.x) > MOTION_EPS || Math.abs(tv.y) > MOTION_EPS || Math.abs(tv.z) > MOTION_EPS ||
+        Math.abs(cameraState.scrollAccum) > MOTION_EPS
+      ) {
+        invalidate();
+      }
     } else {
       // Focus or unfocus: damp camera toward animTarget (zoom-out/unfocus snaps back faster)
       cameraState.scrollAccum = 0;
@@ -164,6 +185,8 @@ function CameraController() {
           cameraState.pos.copy(cameraState.animTarget);
         }
       }
+      // Keep the damp animating until it reaches the focus/unfocus target.
+      if (cameraState.isAnimatingFocus) invalidate();
     }
   });
 
@@ -172,17 +195,19 @@ function CameraController() {
 
 interface SceneProps {
   clips: ClipData[];
+  bgColor: string;
 }
 
-export function Scene({ clips }: SceneProps) {
+export function Scene({ clips, bgColor }: SceneProps) {
   return (
     <Canvas
+      frameloop="demand"
       camera={{ position: [0, 0, INITIAL_CAM_Z], fov: 45, near: 0.1, far: 1000 }}
       gl={{ antialias: false, powerPreference: "high-performance", alpha: false }}
       dpr={Math.min(typeof window !== "undefined" ? window.devicePixelRatio : 1, IS_MOBILE ? 1 : 1.5)}
       onPointerMissed={unfocusTile}
     >
-      <color attach="background" args={[BG_COLOR]} />
+      <color attach="background" args={[bgColor]} />
       <CameraController />
       <Grid clips={clips} />
     </Canvas>

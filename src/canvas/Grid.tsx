@@ -28,6 +28,9 @@ interface Bounds {
 
 // Recompute the play set once the camera drifts half a tile from where it was last computed.
 const PLAY_RECOMPUTE_DIST_SQ = (TILE_SPACING * 0.5) ** 2;
+// Defer the play-set (the tiles that actually decode video) until the camera settles, so flinging
+// across the canvas doesn't kick off and instantly abort dozens of video loads (decoder thrash).
+const PLAY_SETTLE_MS = 120;
 
 export function Grid({ clips }: GridProps) {
   const { camera, size } = useThree();
@@ -96,18 +99,40 @@ export function Grid({ clips }: GridProps) {
   const [cells, setCells] = React.useState<CellEntry[]>([]);
   const [playSet, setPlaySet] = React.useState<Set<string>>(new Set());
 
+  // Mirrors the latest `cells` so the debounced timer reads fresh data without re-subscribing.
+  const cellsRef = React.useRef<CellEntry[]>([]);
+  const playTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const lastBounds = React.useRef<Bounds>({ gxMin: NaN, gxMax: NaN, gyMin: NaN, gyMax: NaN });
   const lastPlayPos = React.useRef({ x: Number.POSITIVE_INFINITY, y: Number.POSITIVE_INFINITY });
+
+  // Recompute the play set only once the camera has been still for PLAY_SETTLE_MS (trailing edge).
+  const schedulePlaySet = React.useCallback(() => {
+    if (playTimerRef.current !== null) clearTimeout(playTimerRef.current);
+    playTimerRef.current = setTimeout(() => {
+      playTimerRef.current = null;
+      setPlaySet(computePlaySet(cellsRef.current));
+    }, PLAY_SETTLE_MS);
+  }, [computePlaySet]);
 
   // Seed (and re-seed on resize / clip-set change) from the camera's current position.
   React.useEffect(() => {
     const b = computeBounds();
     lastBounds.current = b;
     const list = buildCells(b);
+    cellsRef.current = list;
     lastPlayPos.current = { x: cameraState.pos.x, y: cameraState.pos.y };
     setCells(list);
-    setPlaySet(computePlaySet(list));
+    setPlaySet(computePlaySet(list)); // immediate on first paint so video shows without a 120ms gap
   }, [computeBounds, buildCells, computePlaySet]);
+
+  // Cancel any pending debounce on unmount.
+  React.useEffect(
+    () => () => {
+      if (playTimerRef.current !== null) clearTimeout(playTimerRef.current);
+    },
+    []
+  );
 
   useFrame(() => {
     const b = computeBounds();
@@ -115,18 +140,18 @@ export function Grid({ clips }: GridProps) {
     const boundsChanged =
       b.gxMin !== lb.gxMin || b.gxMax !== lb.gxMax || b.gyMin !== lb.gyMin || b.gyMax !== lb.gyMax;
 
-    let list = cells;
     if (boundsChanged) {
       lastBounds.current = b;
-      list = buildCells(b);
-      setCells(list);
+      const list = buildCells(b);
+      cellsRef.current = list;
+      setCells(list); // cells track the camera immediately — no white space at edges
     }
 
     const dx = cameraState.pos.x - lastPlayPos.current.x;
     const dy = cameraState.pos.y - lastPlayPos.current.y;
     if (boundsChanged || dx * dx + dy * dy > PLAY_RECOMPUTE_DIST_SQ) {
       lastPlayPos.current = { x: cameraState.pos.x, y: cameraState.pos.y };
-      setPlaySet(computePlaySet(list));
+      schedulePlaySet(); // debounced — video swaps wait for the camera to settle
     }
   });
 
@@ -139,7 +164,8 @@ export function Grid({ clips }: GridProps) {
           key={c.key}
           tileKey={c.key}
           clip={c.clip}
-          position={[c.worldX, c.worldY, 0]}
+          x={c.worldX}
+          y={c.worldY}
           inPlayRadius={playSet.has(c.key)}
         />
       ))}

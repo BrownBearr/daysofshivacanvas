@@ -91,6 +91,10 @@ class VideoPool {
     if (oldest !== undefined) this.release(oldest);
   }
 
+  setAllVolume(v: number): void {
+    for (const el of this.elements) el.volume = Math.max(0, Math.min(1, v));
+  }
+
   getElement(tileId: string): HTMLVideoElement | undefined {
     const index = this.assignments.get(tileId);
     return index !== undefined ? this.elements[index] : undefined;

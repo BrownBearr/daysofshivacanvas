@@ -14,6 +14,6 @@ html, body, #root {
 
 body {
   background: #ffffff;
-  font-family: Inter, system-ui, sans-serif;
+  font-family: 'Darker Grotesque', Inter, system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
