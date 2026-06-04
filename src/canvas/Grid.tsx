@@ -88,7 +88,9 @@ export function Grid({ clips }: GridProps) {
     const lb = lastBounds.current;
     if (b.gxMin !== lb.gxMin || b.gxMax !== lb.gxMax || b.gyMin !== lb.gyMin || b.gyMax !== lb.gyMax) {
       lastBounds.current = b;
-      setCells(buildCells(b));
+      // startTransition defers tile mount/unmount reconciliation so it doesn't block
+      // the animation frame that triggered the frustum boundary crossing.
+      React.startTransition(() => setCells(buildCells(b)));
     }
   });
 

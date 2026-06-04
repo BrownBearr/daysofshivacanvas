@@ -1,6 +1,5 @@
 import * as React from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { damp3 } from "maath/easing";
 import { INITIAL_CAM_Z, MIN_CAM_Z, MAX_CAM_Z, IS_MOBILE } from "../theme";
 import { cameraState, unfocusTile, setRequestRender } from "./camera-state";
 import { Grid } from "./Grid";
@@ -14,9 +13,6 @@ const DRAG_SENSITIVITY = 0.012;
 const TOUCH_DRAG_SENSITIVITY = 0.010;
 const CLICK_THRESHOLD = 5;
 const TOUCH_CLICK_THRESHOLD = 15;
-// maath damp3 smoothTime: approximate seconds to reach target — smaller = snappier (tune for feel)
-const FOCUS_SMOOTH_TIME = 0.22;
-const UNFOCUS_SMOOTH_TIME = 0.18;
 // Below this, free-nav velocity/scroll is treated as settled and the demand loop stops requesting frames.
 const MOTION_EPS = 1e-4;
 
@@ -41,6 +37,10 @@ function CameraController() {
       maxDragDist.current = 0;
       cameraState.lastMouse = { x: e.clientX, y: e.clientY };
       body.style.cursor = "grabbing";
+      // Disable R3F pointer events during drag — eliminates intersection tests against
+      // all visible tiles on every mousemove. Panning uses window-level mousemove
+      // (captured below) so disabling canvas pointer events doesn't break velocity.
+      (e.currentTarget as HTMLElement).style.pointerEvents = "none";
       window.addEventListener("mousemove", onMouseMove);
       window.addEventListener("mouseup", onMouseUp);
     };
@@ -61,6 +61,8 @@ function CameraController() {
 
     const onMouseUp = () => {
       body.style.cursor = "";
+      const canvas = document.querySelector("canvas") as HTMLCanvasElement | null;
+      if (canvas) canvas.style.pointerEvents = "";
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
       setTimeout(() => { cameraState.isDragging = false; }, 0);
@@ -132,9 +134,9 @@ function CameraController() {
     };
   }, []);
 
-  useFrame((_, delta) => {
-    // Velocity physics — only applied during free nav
-    if (cameraState.focusedTileId === null && !cameraState.isAnimatingFocus) {
+  useFrame(() => {
+    if (cameraState.focusedTileId === null) {
+      // Free nav: velocity physics
       cameraState.targetVel.z += cameraState.scrollAccum;
       cameraState.scrollAccum *= 0.7;
 
@@ -157,7 +159,7 @@ function CameraController() {
       cameraState.animTarget.copy(cameraState.pos);
       camera.position.set(cameraState.pos.x, cameraState.pos.y, cameraState.pos.z);
 
-      // Demand frameloop: keep rendering only while there's residual motion (inertia tail / scroll).
+      // Demand frameloop: keep rendering only while there's residual motion.
       const v = cameraState.vel;
       const tv = cameraState.targetVel;
       if (
@@ -168,25 +170,8 @@ function CameraController() {
         invalidate();
       }
     } else {
-      // Focus or unfocus: damp camera toward animTarget (zoom-out/unfocus snaps back faster)
+      // Overlay open: lock panning and zoom while the video plays full-screen.
       cameraState.scrollAccum = 0;
-      const smoothTime = cameraState.focusedTileId === null ? UNFOCUS_SMOOTH_TIME : FOCUS_SMOOTH_TIME;
-      damp3(camera.position, [cameraState.animTarget.x, cameraState.animTarget.y, cameraState.animTarget.z], smoothTime, delta);
-
-      if (cameraState.isAnimatingFocus) {
-        const dx = camera.position.x - cameraState.animTarget.x;
-        const dy = camera.position.y - cameraState.animTarget.y;
-        const dz = camera.position.z - cameraState.animTarget.z;
-        // Unfocus unlocks controls early (looser threshold) so you can pan/zoom the instant
-        // it's visually back, instead of waiting out the damp's slow tail.
-        const endSq = cameraState.focusedTileId === null ? 0.02 : 0.0001;
-        if (dx * dx + dy * dy + dz * dz < endSq) {
-          cameraState.isAnimatingFocus = false;
-          cameraState.pos.copy(cameraState.animTarget);
-        }
-      }
-      // Keep the damp animating until it reaches the focus/unfocus target.
-      if (cameraState.isAnimatingFocus) invalidate();
     }
   });
 

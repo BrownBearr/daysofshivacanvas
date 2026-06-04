@@ -1,7 +1,8 @@
 import * as React from "react";
-import { cameraState } from "../canvas/camera-state";
+import { cameraState, unfocusTile } from "../canvas/camera-state";
 import { muteState } from "../canvas/mute-state";
 import { videoPool } from "../lib/video-pool";
+import { sourceUrl } from "../lib/clip-source";
 import type { ClipData } from "../types";
 
 interface ChromeProps {
@@ -82,8 +83,71 @@ const iconBtnStyle: React.CSSProperties = {
   color: "inherit",
 };
 
+function VideoOverlay({ clip, muted, volume }: { clip: ClipData; muted: boolean; volume: number }) {
+  const videoRef = React.useRef<HTMLVideoElement>(null);
+  const [visible, setVisible] = React.useState(false);
+
+  React.useLayoutEffect(() => {
+    const id = requestAnimationFrame(() => setVisible(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+
+  React.useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    el.muted = muted;
+    el.volume = volume;
+  }, [muted, volume]);
+
+  return (
+    <div
+      onClick={unfocusTile}
+      style={{
+        position: "fixed",
+        // Sit between the top and bottom bars so they remain fully visible
+        top: BAR_H,
+        bottom: BAR_H,
+        left: 0,
+        right: 0,
+        zIndex: 50,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        // Semi-transparent + blur so the grid is visible but softened behind
+        background: "rgba(0,0,0,0.55)",
+        backdropFilter: "blur(18px)",
+        WebkitBackdropFilter: "blur(18px)",
+        opacity: visible ? 1 : 0,
+        transition: "opacity 0.2s ease",
+        pointerEvents: "auto",
+        cursor: "default",
+      }}
+    >
+      <video
+        ref={videoRef}
+        src={sourceUrl(clip)}
+        autoPlay
+        loop
+        playsInline
+        muted={muted}
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          maxWidth: "88%",
+          maxHeight: "88%",
+          objectFit: "contain",
+          display: "block",
+          transform: visible ? "scale(1)" : "scale(0.08)",
+          transition: "transform 0.28s cubic-bezier(0.22, 1, 0.36, 1)",
+          cursor: "auto",
+        }}
+      />
+    </div>
+  );
+}
+
 export function Chrome({ clips, darkMode, onToggleDark }: ChromeProps) {
   const [focusedName, setFocusedName] = React.useState<string | null>(cameraState.focusedClipName);
+  const [focusedClip, setFocusedClip] = React.useState<ClipData | null>(cameraState.focusedClip);
   const [hoveredName, setHoveredName] = React.useState<string | null>(cameraState.hoveredClipName);
   const [showHelp, setShowHelp] = React.useState(false);
   const [muted, setMuted] = React.useState(muteState.muted);
@@ -92,6 +156,7 @@ export function Chrome({ clips, darkMode, onToggleDark }: ChromeProps) {
   React.useEffect(() => {
     const id = setInterval(() => {
       setFocusedName(cameraState.focusedClipName);
+      setFocusedClip(cameraState.focusedClip);
       setHoveredName(cameraState.hoveredClipName);
     }, 50);
     return () => clearInterval(id);
@@ -131,6 +196,11 @@ export function Chrome({ clips, darkMode, onToggleDark }: ChromeProps) {
       className="fixed inset-0 pointer-events-none select-none"
       style={{ fontFamily: "'Darker Grotesque', Inter, system-ui, sans-serif", color: text }}
     >
+      {/* Full-screen video overlay — mounts/unmounts on focus; key forces fresh video element */}
+      {focusedClip && (
+        <VideoOverlay key={focusedClip.name} clip={focusedClip} muted={muted} volume={volume} />
+      )}
+
       {/* Top bar */}
       <div
         className="absolute top-0 left-0 right-0 flex items-center justify-between"

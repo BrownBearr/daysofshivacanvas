@@ -3,11 +3,10 @@ import * as THREE from "three";
 import { useThree, useFrame } from "@react-three/fiber";
 import { useSpring, animated } from "@react-spring/three";
 import type { ClipData } from "../types";
-import { TILE_W, TILE_H, MIN_CAM_Z, IS_MOBILE } from "../theme";
+import { TILE_W, TILE_H, IS_MOBILE } from "../theme";
 import { videoPool } from "../lib/video-pool";
-import { sourceUrl, previewUrl, posterUrl } from "../lib/clip-source";
+import { previewUrl, posterUrl } from "../lib/clip-source";
 import { cameraState, focusTile, unfocusTile, subscribeFocus } from "./camera-state";
-import { muteState } from "./mute-state";
 
 interface TileProps {
   // Unique per-cell identity on the infinite lattice ("gx:gy") — NOT the clip index,
@@ -107,7 +106,7 @@ function loadPoster(url: string): Promise<THREE.Texture> {
 // cell's props (clip ref, x, y, inPlayRadius) are unchanged, so memo skips re-rendering it — only
 // the ring of entering/exiting tiles does any work.
 export const Tile = React.memo(function Tile({ tileKey, clip, x, y }: TileProps) {
-  const { camera, invalidate } = useThree();
+  const { invalidate } = useThree();
   const matRef = React.useRef<THREE.MeshBasicMaterial>(null);
   const videoTexRef = React.useRef<THREE.VideoTexture | null>(null);
   const videoElRef = React.useRef<HTMLVideoElement | null>(null);
@@ -139,18 +138,15 @@ export const Tile = React.memo(function Tile({ tileKey, clip, x, y }: TileProps)
     return () => clearTimeout(t);
   }, [hovered, tileKey]);
 
-  // Focus changes live in the mutable cameraState, so subscribe: focusing this tile arms play
-  // immediately (skip the hover delay); unfocusing disarms it only if the cursor isn't on it.
+  // Disarm play when this tile loses focus (and the cursor isn't on it).
+  // The overlay handles the focused video; the tile just shows poster/preview.
   React.useEffect(
     () =>
       subscribeFocus(() => {
-        if (cameraState.focusedTileId === tileKey) setPlayArmed(true);
-        else if (!hoveredRef.current) setPlayArmed(false);
+        if (cameraState.focusedTileId !== tileKey && !hoveredRef.current) setPlayArmed(false);
       }),
     [tileKey]
   );
-  // Tracks focus edges so the frame loop can swap preview<->source exactly on transition.
-  const wasFocusedRef = React.useRef(false);
   // Whether the active element supports requestVideoFrameCallback (else fall back per-frame).
   const usesRVFCRef = React.useRef(false);
   // True once the video has produced its first frame. Until then we keep showing the poster,
@@ -247,23 +243,11 @@ export const Tile = React.memo(function Tile({ tileKey, clip, x, y }: TileProps)
     e.stopPropagation();
     if (cameraState.isDragging) return;
 
-    // Any click while focused (this tile or any other) exits focus and returns to the prior zoom.
     if (cameraState.focusedTileId !== null) {
       unfocusTile();
     } else {
-      const fovRad = (camera as THREE.PerspectiveCamera).fov * (Math.PI / 180);
-      const fitZ = (TILE_W * 1.2) / (2 * Math.tan(fovRad / 2));
-      focusTile(tileKey, x, y, Math.max(fitZ, MIN_CAM_Z), clip.name);
-      // If a video element is already bound (the tile was hovered), upgrade to full source and
-      // unmute now, inside the user gesture. Otherwise focusing arms play (via the focus
-      // subscription), the acquire effect binds a preview element, and the frame loop's focus
-      // edge upgrades it to source on the next frame.
-      const el = videoElRef.current;
-      if (el) {
-        videoPool.acquire(tileKey, sourceUrl(clip));
-        el.muted = muteState.muted;
-        el.play().catch(() => {});
-      }
+      // Open full-screen overlay — camera stays in place.
+      focusTile(tileKey, clip.name, clip);
     }
   };
 
@@ -281,43 +265,13 @@ export const Tile = React.memo(function Tile({ tileKey, clip, x, y }: TileProps)
 
     const tex = videoTexRef.current;
     const el = videoElRef.current;
-    const focused = cameraState.focusedTileId === tileKey;
-    const focusEdge = focused !== wasFocusedRef.current;
 
     const hasContent = (tex && el && el.readyState >= 2) || posterTex;
     const targetOpacity = hasContent ? 1 : 0;
     const opacitySettled = Math.abs(mat.opacity - targetOpacity) <= 0.001;
 
-    // Fast path: a settled static-poster tile (no video element, no focus transition pending,
-    // opacity already at target) needs zero per-frame work. While panning this is ~all visible
-    // tiles, so bailing here is what keeps a fling cheap — only the entering ring and any
-    // hovered/focused tile below do real work.
-    if (!el && !focusEdge && opacitySettled) return;
-
-    // Focus edge: swap preview<->source and toggle mute exactly when focus changes.
-    if (focusEdge) {
-      wasFocusedRef.current = focused;
-      if (el) {
-        if (focused) {
-          videoPool.acquire(tileKey, sourceUrl(clip));
-          el.muted = muteState.muted;
-          el.play().catch(() => {});
-        } else if (shouldPlayRef.current) {
-          videoPool.acquire(tileKey, previewUrl(clip));
-          el.muted = true;
-        }
-        if (tex) {
-          el.addEventListener(
-            "loadedmetadata",
-            () => applySquareCrop(tex, el.videoWidth, el.videoHeight),
-            { once: true }
-          );
-        }
-      }
-    }
-
-    // Keep focused clip's muted state in sync with the global mute toggle.
-    if (el && focused) el.muted = muteState.muted;
+    // Fast path: static poster tile with settled opacity needs no per-frame work.
+    if (!el && opacitySettled) return;
 
     // Fallback frame pump when requestVideoFrameCallback is unavailable. This runs inside useFrame,
     // so it must self-sustain the demand loop while the video plays.

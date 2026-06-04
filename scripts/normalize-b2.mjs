@@ -20,6 +20,8 @@
 //   node scripts/normalize-b2.mjs --delete-originals  # also remove messy originals
 //   node scripts/normalize-b2.mjs --manifest-only     # just rebuild clips.json
 //   node scripts/normalize-b2.mjs --force             # re-process already-normalized clips
+//   node scripts/normalize-b2.mjs --posters-only      # re-generate + re-upload just poster JPGs
+//                                                     # (fast: downloads source, makes poster, uploads — skips video transcode)
 
 import fs from "node:fs";
 import os from "node:os";
@@ -68,6 +70,7 @@ const LIMIT = limitArg ? Number.parseInt(limitArg, 10) : Infinity;
 const DRY = flag("--dry-run");
 const FORCE = flag("--force");
 const DELETE_ORIGINALS = flag("--delete-originals");
+const POSTERS_ONLY = flag("--posters-only");
 
 const BUCKET = process.env.B2_BUCKET;
 const ENDPOINT = process.env.B2_ENDPOINT;
@@ -139,10 +142,14 @@ function makePreview(input, output) {
 }
 
 function makePoster(input, output) {
+  // Scale to 400px height (≈2.4× the on-screen tile size at default zoom, enough for retina).
+  // q:v 5 is still visually lossless at thumbnail size; was q:v 3 at native (1280p) resolution
+  // which produced 250KB+ files — 17× larger than necessary for a ~170px tile.
+  const vf = "scale=-2:400";
   try {
-    run(FFMPEG, ["-y", "-ss", "0.5", "-i", input, "-frames:v", "1", "-q:v", "3", output]);
+    run(FFMPEG, ["-y", "-ss", "0.5", "-i", input, "-frames:v", "1", "-vf", vf, "-q:v", "5", output]);
   } catch {
-    run(FFMPEG, ["-y", "-i", input, "-frames:v", "1", "-q:v", "3", output]); // very short clip fallback
+    run(FFMPEG, ["-y", "-i", input, "-frames:v", "1", "-vf", vf, "-q:v", "5", output]);
   }
 }
 
@@ -234,9 +241,12 @@ async function main() {
   if (!DRY && !flag("--no-cors")) await setCors(client);
 
   const keys = await listAll(client);
-  // Input candidates: video files that are not generated previews.
-  const inputs = keys.filter((k) => VIDEO_EXT.test(k) && !PREVIEW.test(k));
-  console.log(`Found ${keys.length} objects, ${inputs.length} video candidates.`);
+  // --posters-only: iterate normalized source files (name.mp4) only — no originals needed.
+  // Normal run: iterate all video files that aren't generated previews.
+  const inputs = POSTERS_ONLY
+    ? keys.filter((k) => /^\d+\.mp4$/i.test(k))
+    : keys.filter((k) => VIDEO_EXT.test(k) && !PREVIEW.test(k));
+  console.log(`Found ${keys.length} objects, ${inputs.length} ${POSTERS_ONLY ? "normalized source" : "video"} candidates.`);
 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "daysofshiva-"));
   const seen = new Set();
@@ -261,14 +271,15 @@ async function main() {
     const prevKey = `${name}-480.mp4`;
     const posterKey = `${name}.jpg`;
 
-    if (!FORCE && (await isNormalized(client, srcKey))) {
+    if (!FORCE && !POSTERS_ONLY && (await isNormalized(client, srcKey))) {
       console.log(`= ${name}: already normalized, skipping`);
       done++;
       continue;
     }
 
     if (DRY) {
-      console.log(`~ ${key}  ->  ${srcKey} + ${prevKey} + ${posterKey}`);
+      const targets = POSTERS_ONLY ? posterKey : `${srcKey} + ${prevKey} + ${posterKey}`;
+      console.log(`~ ${key}  ->  ${targets}`);
       done++;
       continue;
     }
@@ -284,16 +295,24 @@ async function main() {
       await download(client, key, orig);
       console.log("done");
 
-      const info = makeSource(orig, outSrc);
-      console.log(`  source: ${info.webReady ? "remux (copy)" : `transcode from ${info.codec || "?"}/${info.pix || "?"}`}`);
-      makePreview(orig, outPrev);
-      makePoster(orig, outPoster);
+      if (POSTERS_ONLY) {
+        // Skip video transcode — just re-generate the poster at the correct size.
+        makePoster(orig, outPoster);
+        process.stdout.write("  uploading poster… ");
+        await upload(client, posterKey, outPoster, "image/jpeg");
+        console.log("done");
+      } else {
+        const info = makeSource(orig, outSrc);
+        console.log(`  source: ${info.webReady ? "remux (copy)" : `transcode from ${info.codec || "?"}/${info.pix || "?"}`}`);
+        makePreview(orig, outPrev);
+        makePoster(orig, outPoster);
 
-      process.stdout.write("  uploading… ");
-      await upload(client, srcKey, outSrc, "video/mp4", true);
-      await upload(client, prevKey, outPrev, "video/mp4");
-      await upload(client, posterKey, outPoster, "image/jpeg");
-      console.log("done");
+        process.stdout.write("  uploading… ");
+        await upload(client, srcKey, outSrc, "video/mp4", true);
+        await upload(client, prevKey, outPrev, "video/mp4");
+        await upload(client, posterKey, outPoster, "image/jpeg");
+        console.log("done");
+      }
 
       if (DELETE_ORIGINALS && key !== srcKey) {
         await client.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }));
