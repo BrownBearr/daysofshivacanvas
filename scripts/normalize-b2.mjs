@@ -22,6 +22,9 @@
 //   node scripts/normalize-b2.mjs --force             # re-process already-normalized clips
 //   node scripts/normalize-b2.mjs --posters-only      # re-generate + re-upload just poster JPGs
 //                                                     # (fast: downloads source, makes poster, uploads — skips video transcode)
+//   node scripts/normalize-b2.mjs --reencode-sources  # re-encode all source mp4s to H.264 720p CRF23
+//                                                     # (83% smaller: ~47MB avg → ~6MB avg, ~28 min total)
+//   node scripts/normalize-b2.mjs --reencode-sources --min-size-mb 40  # second pass: skip files <40MB
 
 import fs from "node:fs";
 import os from "node:os";
@@ -67,10 +70,13 @@ const args = new Set(process.argv.slice(2));
 const flag = (name) => args.has(name);
 const limitArg = process.argv.find((a, i) => process.argv[i - 1] === "--limit");
 const LIMIT = limitArg ? Number.parseInt(limitArg, 10) : Infinity;
+const minSizeArg = process.argv.find((a, i) => process.argv[i - 1] === "--min-size-mb");
+const MIN_SIZE_BYTES = minSizeArg ? Number.parseInt(minSizeArg, 10) * 1024 * 1024 : 0;
 const DRY = flag("--dry-run");
 const FORCE = flag("--force");
 const DELETE_ORIGINALS = flag("--delete-originals");
 const POSTERS_ONLY = flag("--posters-only");
+const REENCODE_SOURCES = flag("--reencode-sources");
 
 const BUCKET = process.env.B2_BUCKET;
 const ENDPOINT = process.env.B2_ENDPOINT;
@@ -138,6 +144,17 @@ function makePreview(input, output) {
     "-c:v", "libx264", "-profile:v", "main", "-pix_fmt", "yuv420p",
     "-g", "48", "-keyint_min", "48", "-sc_threshold", "0",
     "-crf", "30", "-preset", "veryfast", "-an", "-movflags", "+faststart", output,
+  ]);
+}
+
+function reencodeSource(input, output) {
+  // Re-encode to H.264 720p CRF23: ~83% smaller than lossless remux of Clipchamp originals.
+  // scale=-2:720 → height=720, width auto (div-by-2); handles both landscape and portrait.
+  run(FFMPEG, [
+    "-y", "-i", input,
+    "-c:v", "libx264", "-profile:v", "high", "-pix_fmt", "yuv420p",
+    "-vf", "scale=-2:720", "-crf", "23", "-preset", "fast",
+    "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", output,
   ]);
 }
 
@@ -231,12 +248,85 @@ async function buildManifest(client) {
   console.log(`✓ Wrote ${clips.length} clips to src/data/clips.json`);
 }
 
+async function reencodeAllSources(client) {
+  const keys = await listAll(client);
+  const sources = keys.filter(k => /^\d+\.mp4$/i.test(k)).sort((a, b) => {
+    const na = parseInt(a), nb = parseInt(b);
+    return na - nb;
+  });
+  console.log(`Re-encoding ${sources.length} source files to H.264 720p CRF23...`);
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "daysofshiva-reencode-"));
+  let done = 0, skipped = 0, failed = 0;
+
+  for (const key of sources) {
+    if (done + skipped >= LIMIT) break;
+    const name = key.replace(/\.mp4$/i, "");
+
+    if (DRY) {
+      console.log(`~ ${key}`);
+      done++;
+      continue;
+    }
+
+    const orig = path.join(tmp, `${name}_dl.mp4`);
+    const out  = path.join(tmp, key);
+    const t0 = Date.now();
+
+    try {
+      // Skip files below the size threshold without downloading them.
+      if (MIN_SIZE_BYTES > 0) {
+        let remoteSize = 0;
+        try {
+          const head = await client.send(new HeadObjectCommand({ Bucket: BUCKET, Key: key }));
+          remoteSize = head.ContentLength ?? 0;
+        } catch { remoteSize = 0; }
+        if (remoteSize < MIN_SIZE_BYTES) {
+          process.stdout.write(`[${done + skipped + 1}/${sources.length}] ${name}  ${Math.round(remoteSize/1024/1024)}MB < ${Math.round(MIN_SIZE_BYTES/1024/1024)}MB threshold — skip\n`);
+          skipped++;
+          continue;
+        }
+      }
+
+      process.stdout.write(`[${done + skipped + 1}/${sources.length}] ${name}  downloading… `);
+      await download(client, key, orig);
+      const dlMs = Date.now() - t0;
+
+      const origKB = Math.round(fs.statSync(orig).size / 1024);
+      process.stdout.write(`${origKB}KB  encoding… `);
+
+      const encStart = Date.now();
+      reencodeSource(orig, out);
+      const encMs = Date.now() - encStart;
+
+      const outKB = Math.round(fs.statSync(out).size / 1024);
+      const pct = Math.round((1 - outKB / origKB) * 100);
+      process.stdout.write(`${outKB}KB (−${pct}%)  uploading… `);
+
+      await upload(client, key, out, "video/mp4", true);
+      console.log(`done  [dl:${(dlMs/1000).toFixed(1)}s enc:${(encMs/1000).toFixed(1)}s]`);
+      done++;
+    } catch (e) {
+      console.error(`\n  ✗ ${name}: ${e.message}`);
+      failed++;
+    } finally {
+      for (const f of [orig, out]) {
+        try { fs.rmSync(f, { force: true }); } catch {}
+      }
+    }
+  }
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+  console.log(`\nDone. Re-encoded ${done}, failed ${failed}, skipped ${skipped}.`);
+}
+
 async function main() {
   requireEnv();
   const client = s3();
 
   if (flag("--cors-only")) return setCors(client);
   if (flag("--manifest-only")) return buildManifest(client);
+  if (REENCODE_SOURCES) return reencodeAllSources(client);
 
   if (!DRY && !flag("--no-cors")) await setCors(client);
 
