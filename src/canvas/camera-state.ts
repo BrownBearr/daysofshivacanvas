@@ -60,3 +60,15 @@ export function unfocusTile() {
   notifyFocus();
   requestRender();
 }
+
+// Snap the camera back to the origin/default zoom. Used when the clip set is
+// regrouped or filtered so the new arrangement is shown from the top, not from
+// wherever the user had panned to.
+export function resetView() {
+  cameraState.pos.set(0, 0, INITIAL_CAM_Z);
+  cameraState.animTarget.set(0, 0, INITIAL_CAM_Z);
+  cameraState.vel.set(0, 0, 0);
+  cameraState.targetVel.set(0, 0, 0);
+  cameraState.scrollAccum = 0;
+  requestRender();
+}

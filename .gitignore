@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Style-tagging pipeline cache: CLIP vectors + downloaded representative thumbnails
+scripts/.cache/
+
 # Env (VITE_ vars are public; B2 upload keys are secret — never commit either)
 .env
 .env.*

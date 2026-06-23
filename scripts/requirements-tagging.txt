@@ -1,0 +1,11 @@
+# Dependencies for scripts/tag-styles.py (style clustering pipeline).
+# Install once:  python3 -m pip install -r scripts/requirements-tagging.txt
+#
+# Heavy item is torch (~2GB). Everything here runs locally and free — no API key.
+boto3>=1.34            # Backblaze B2 over the S3-compatible API
+open_clip_torch>=2.24  # CLIP image embeddings (pulls in torch)
+hdbscan>=0.8.33        # density clustering ("let the data decide")
+umap-learn>=0.5.5      # dim-reduction before clustering (key for good clusters)
+scikit-learn>=1.4      # PCA fallback if UMAP is unavailable
+numpy>=1.26
+Pillow>=10.0           # decode JPG posters

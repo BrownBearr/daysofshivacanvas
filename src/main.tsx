@@ -1,14 +1,16 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
-import clipsData from "./data/clips.json";
+import { resetView, unfocusTile } from "./canvas/camera-state";
 import { Scene } from "./canvas/Scene";
-import { Chrome } from "./ui/Chrome";
-import { LoadingScreen } from "./ui/LoadingScreen";
+import clipsData from "./data/clips.json";
 import { posterUrl } from "./lib/clip-source";
+import { arrangeBySimilarity, SHUFFLE_VIEW } from "./lib/clip-order";
 import { prefetchImages } from "./lib/poster-prefetch";
 import { GRID_COLS, INITIAL_CAM_Z, TILE_SPACING, VISIBLE_MARGIN_TILES } from "./theme";
 import type { ClipData } from "./types";
+import { Chrome } from "./ui/Chrome";
+import { LoadingScreen } from "./ui/LoadingScreen";
 
 // Safety net: never trap the user behind the loader if some assets stall (no load/error event).
 const MAX_LOAD_MS = 20000;
@@ -23,8 +25,7 @@ function initialVisiblePosterUrls(clips: ClipData[]): string[] {
   const rows = Math.max(1, Math.ceil(total / cols));
   const fovRad = (45 * Math.PI) / 180; // matches Scene's Canvas camera fov
   const halfH = INITIAL_CAM_Z * Math.tan(fovRad / 2);
-  const aspect =
-    typeof window !== "undefined" ? window.innerWidth / Math.max(1, window.innerHeight) : 1.6;
+  const aspect = typeof window !== "undefined" ? window.innerWidth / Math.max(1, window.innerHeight) : 1.6;
   const halfW = halfH * aspect;
   const m = VISIBLE_MARGIN_TILES;
   const gxMin = Math.floor(-halfW / TILE_SPACING) - m;
@@ -54,10 +55,24 @@ function shuffle<T>(arr: T[]): T[] {
 const shuffledClips = shuffle(clipsData.clips);
 
 function App() {
-  const clips = shuffledClips;
   const [progress, setProgress] = React.useState(0);
   const [ready, setReady] = React.useState(false);
   const [darkMode, setDarkMode] = React.useState(false);
+  // View selection: SHUFFLE_VIEW (random grid) or SIMILARITY_VIEW (similar clips grouped).
+  const [view, setView] = React.useState<string>(SHUFFLE_VIEW);
+
+  const clips = React.useMemo(
+    () => (view === SHUFFLE_VIEW ? shuffledClips : arrangeBySimilarity(shuffledClips)),
+    [view]
+  );
+
+  // Re-grouping/filtering changes the spatial layout — snap back to the origin
+  // and drop any open focus so the new arrangement reads from the top.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally keyed on `view` to fire on change; the body reads no reactive values.
+  React.useEffect(() => {
+    unfocusTile();
+    resetView();
+  }, [view]);
 
   const bgColor = darkMode ? "#121212" : "#ffffff";
 
@@ -97,7 +112,7 @@ function App() {
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
       <Scene clips={clips} bgColor={bgColor} />
-      <Chrome clips={clips} darkMode={darkMode} onToggleDark={() => setDarkMode((d) => !d)} />
+      <Chrome clips={clips} darkMode={darkMode} onToggleDark={() => setDarkMode((d) => !d)} view={view} onChangeView={setView} />
       <LoadingScreen progress={progress} done={ready} />
     </div>
   );
