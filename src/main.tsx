@@ -7,9 +7,11 @@ import clipsData from "./data/clips.json";
 import { posterUrl } from "./lib/clip-source";
 import { arrangeBySimilarity, SHUFFLE_VIEW } from "./lib/clip-order";
 import { prefetchImages } from "./lib/poster-prefetch";
+import { webglSupported } from "./lib/webgl-support";
 import { GRID_COLS, INITIAL_CAM_Z, TILE_SPACING, VISIBLE_MARGIN_TILES } from "./theme";
 import type { ClipData } from "./types";
 import { Chrome } from "./ui/Chrome";
+import { AssetBlockedBanner, WebglNotice } from "./ui/FallbackNotice";
 import { LoadingScreen } from "./ui/LoadingScreen";
 
 // Safety net: never trap the user behind the loader if some assets stall (no load/error event).
@@ -54,10 +56,36 @@ function shuffle<T>(arr: T[]): T[] {
 
 const shuffledClips = shuffle(clipsData.clips);
 
+// Probed once at startup: privacy shields (e.g. Brave "Strict" fingerprint blocking) can
+// deny WebGL, which would render the whole grid as a blank white canvas.
+const WEBGL_OK = webglSupported();
+
+// If almost every first-screen poster fails to download, the CDN is being blocked
+// client-side (content blocker / shields) — warn instead of showing an empty grid.
+const BLOCKED_FAILURE_RATIO = 0.9;
+
+// Catches WebGL/three.js failures that slip past the upfront probe (e.g. context creation
+// throwing inside the R3F Canvas) and shows the same guidance instead of a blank page.
+class SceneErrorBoundary extends React.Component<
+  React.PropsWithChildren<{ darkMode: boolean }>,
+  { failed: boolean }
+> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    if (this.state.failed) return <WebglNotice darkMode={this.props.darkMode} />;
+    return this.props.children;
+  }
+}
+
 function App() {
   const [progress, setProgress] = React.useState(0);
   const [ready, setReady] = React.useState(false);
   const [darkMode, setDarkMode] = React.useState(false);
+  const [assetsBlocked, setAssetsBlocked] = React.useState(false);
+  const [bannerDismissed, setBannerDismissed] = React.useState(false);
   // View selection: SHUFFLE_VIEW (random grid) or SIMILARITY_VIEW (similar clips grouped).
   const [view, setView] = React.useState<string>(SHUFFLE_VIEW);
 
@@ -84,6 +112,8 @@ function App() {
   // never trigger a network load storm. Two phases: the first-screen posters gate the loader (a
   // ~50-image wait, not ~570); the remainder warm in the background once the canvas is revealed.
   React.useEffect(() => {
+    if (!WEBGL_OK) return; // no canvas to compose — don't pull ~570 posters for nothing
+
     let finished = false;
     const finish = () => {
       if (!finished) {
@@ -100,20 +130,35 @@ function App() {
 
     prefetchImages(visible, (loaded, total) => {
       setProgress(total ? loaded / total : 1);
-    }).then(() => {
+    }).then(({ total, failed }) => {
       clearTimeout(timer);
       finish();
+      if (total > 0 && failed / total >= BLOCKED_FAILURE_RATIO) {
+        // Requests are being refused wholesale — tell the user and skip the
+        // background warm-up so we don't fire hundreds more blocked requests.
+        setAssetsBlocked(true);
+        return;
+      }
       // Background phase: no progress UI, just warm the cache for later pans.
       prefetchImages(rest, () => {});
     });
     return () => clearTimeout(timer);
   }, [clips]);
 
+  if (!WEBGL_OK) {
+    return <WebglNotice darkMode={darkMode} />;
+  }
+
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
-      <Scene clips={clips} bgColor={bgColor} />
+      <SceneErrorBoundary darkMode={darkMode}>
+        <Scene clips={clips} bgColor={bgColor} />
+      </SceneErrorBoundary>
       <Chrome clips={clips} darkMode={darkMode} onToggleDark={() => setDarkMode((d) => !d)} view={view} onChangeView={setView} />
       <LoadingScreen progress={progress} done={ready} />
+      {assetsBlocked && !bannerDismissed && (
+        <AssetBlockedBanner darkMode={darkMode} onDismiss={() => setBannerDismissed(true)} />
+      )}
     </div>
   );
 }
