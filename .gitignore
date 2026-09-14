@@ -30,3 +30,9 @@ scripts/.cache/
 *.njsproj
 *.sln
 *.sw?
+
+# Kiosk asset mirror (hundreds of MB; rebuild with npm run clips:mirror)
+local-clips/
+
+# Benchmark output — machine-specific
+bench/

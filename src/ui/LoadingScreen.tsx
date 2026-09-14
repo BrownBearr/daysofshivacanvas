@@ -1,16 +1,42 @@
 import * as React from "react";
 
+// Progress lives in a module store rather than App state. Poster prefetch reports ~50-570 times
+// during load, and routing that through App re-rendered Scene and Chrome on every tick — in the
+// exact window the browser is busy decoding those posters. Only this component subscribes.
+let progressValue = 0;
+const progressListeners = new Set<() => void>();
+
+export function setLoadProgress(next: number): void {
+  if (next === progressValue) return;
+  progressValue = next;
+  for (const fn of progressListeners) fn();
+}
+
+function subscribeProgress(fn: () => void): () => void {
+  progressListeners.add(fn);
+  return () => {
+    progressListeners.delete(fn);
+  };
+}
+
+function useLoadProgress(): number {
+  return React.useSyncExternalStore(
+    subscribeProgress,
+    () => progressValue,
+    () => 0
+  );
+}
+
 interface LoadingScreenProps {
-  // 0..1
-  progress: number;
   // When true the overlay fades out and then unmounts itself.
   done: boolean;
 }
 
 // Full-screen white overlay shown on first load while poster thumbnails prefetch, so the canvas is
 // revealed already-composed instead of popping in tile-by-tile. Visual matches the Chrome bars.
-export function LoadingScreen({ progress, done }: LoadingScreenProps) {
+export function LoadingScreen({ done }: LoadingScreenProps) {
   const [hidden, setHidden] = React.useState(false);
+  const progress = useLoadProgress();
   if (hidden) return null;
 
   const pct = Math.round(progress * 100);

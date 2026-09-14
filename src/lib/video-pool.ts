@@ -10,6 +10,10 @@ class VideoPool {
   constructor(size: number = POOL_SIZE) {
     this.elements = Array.from({ length: size }, () => {
       const el = document.createElement("video");
+      // Grid previews stay muted for the life of the element. Browsers only allow unprompted
+      // playback of muted media, so unmuting these would make play() reject and the tile would
+      // never show a frame at all. Audio belongs to the focused clip, which the DOM overlay owns
+      // and sets its own volume on.
       el.muted = true;
       // Required: B2-hosted videos are drawn into a WebGL VideoTexture, which taints
       // the canvas (SecurityError) unless the element opts into CORS and the bucket
@@ -89,10 +93,6 @@ class VideoPool {
   private evictLRU(): void {
     const oldest = this.lru[0];
     if (oldest !== undefined) this.release(oldest);
-  }
-
-  setAllVolume(v: number): void {
-    for (const el of this.elements) el.volume = Math.max(0, Math.min(1, v));
   }
 
   getElement(tileId: string): HTMLVideoElement | undefined {

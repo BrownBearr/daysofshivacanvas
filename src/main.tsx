@@ -4,40 +4,37 @@ import "./index.css";
 import { resetView, unfocusTile } from "./canvas/camera-state";
 import { Scene } from "./canvas/Scene";
 import clipsData from "./data/clips.json";
-import { posterUrl } from "./lib/clip-source";
 import { arrangeBySimilarity, SHUFFLE_VIEW } from "./lib/clip-order";
-import { prefetchImages } from "./lib/poster-prefetch";
-import { GRID_COLS, INITIAL_CAM_Z, TILE_SPACING, VISIBLE_MARGIN_TILES } from "./theme";
+import { posterUrl } from "./lib/clip-source";
+import { installKioskBehaviour } from "./lib/kiosk";
+import { preparePosters, warmPosters } from "./lib/poster-prefetch";
+import { RUNTIME } from "./runtime";
+import { CAMERA_FOV, GRID_COLS, INITIAL_CAM_Z, TILE_SPACING, VISIBLE_MARGIN_TILES } from "./theme";
 import type { ClipData } from "./types";
 import { Chrome } from "./ui/Chrome";
-import { LoadingScreen } from "./ui/LoadingScreen";
+import { LoadingScreen, setLoadProgress } from "./ui/LoadingScreen";
 
-// Safety net: never trap the user behind the loader if some assets stall (no load/error event).
+// Safety net: never trap the visitor behind the loader if some assets stall with no load/error event.
 const MAX_LOAD_MS = 20000;
 
-// Posters covering the initial camera view (z = INITIAL_CAM_Z, centered on the origin), mirroring
-// Grid's frustum→cell math. We prefetch these first so the canvas reveals fully composed without
-// waiting on the entire ~570-poster library; the rest warm in the background afterward.
+// Posters covering the initial camera view, mirroring Grid's frustum->cell math. These are decoded
+// and uploaded before the loader lifts, so the canvas is revealed genuinely composed rather than
+// merely downloaded — the previous version only warmed the HTTP cache, which put every decode and
+// GPU upload on the frame the loader faded out.
 function initialVisiblePosterUrls(clips: ClipData[]): string[] {
   const total = clips.length;
   if (!total) return [];
-  const cols = GRID_COLS;
-  const rows = Math.max(1, Math.ceil(total / cols));
-  const fovRad = (45 * Math.PI) / 180; // matches Scene's Canvas camera fov
-  const halfH = INITIAL_CAM_Z * Math.tan(fovRad / 2);
+  const rows = Math.max(1, Math.ceil(total / GRID_COLS));
+  const halfH = INITIAL_CAM_Z * Math.tan((CAMERA_FOV * Math.PI) / 360);
   const aspect = typeof window !== "undefined" ? window.innerWidth / Math.max(1, window.innerHeight) : 1.6;
   const halfW = halfH * aspect;
   const m = VISIBLE_MARGIN_TILES;
-  const gxMin = Math.floor(-halfW / TILE_SPACING) - m;
-  const gxMax = Math.ceil(halfW / TILE_SPACING) + m;
-  const gyMin = Math.floor(-halfH / TILE_SPACING) - m;
-  const gyMax = Math.ceil(halfH / TILE_SPACING) + m;
   const urls = new Set<string>();
-  for (let gy = gyMin; gy <= gyMax; gy++) {
-    for (let gx = gxMin; gx <= gxMax; gx++) {
-      const localCol = ((gx % cols) + cols) % cols;
-      const localRow = ((gy % rows) + rows) % rows;
-      urls.add(posterUrl(clips[(localRow * cols + localCol) % total]));
+  for (let gy = Math.floor(-halfH / TILE_SPACING) - m; gy <= Math.ceil(halfH / TILE_SPACING) + m; gy++) {
+    for (let gx = Math.floor(-halfW / TILE_SPACING) - m; gx <= Math.ceil(halfW / TILE_SPACING) + m; gx++) {
+      const col = ((gx % GRID_COLS) + GRID_COLS) % GRID_COLS;
+      const row = ((gy % rows) + rows) % rows;
+      urls.add(posterUrl(clips[(row * GRID_COLS + col) % total]));
     }
   }
   return [...urls];
@@ -54,20 +51,20 @@ function shuffle<T>(arr: T[]): T[] {
 
 const shuffledClips = shuffle(clipsData.clips);
 
+// Memoized so poster-load progress and other App-level state can't re-render the whole canvas
+// subtree. Scene only actually needs to re-render when the clip ordering or background changes.
+const MemoScene = React.memo(Scene);
+
 function App() {
-  const [progress, setProgress] = React.useState(0);
   const [ready, setReady] = React.useState(false);
   const [darkMode, setDarkMode] = React.useState(false);
   // View selection: SHUFFLE_VIEW (random grid) or SIMILARITY_VIEW (similar clips grouped).
   const [view, setView] = React.useState<string>(SHUFFLE_VIEW);
 
-  const clips = React.useMemo(
-    () => (view === SHUFFLE_VIEW ? shuffledClips : arrangeBySimilarity(shuffledClips)),
-    [view]
-  );
+  const clips = React.useMemo(() => (view === SHUFFLE_VIEW ? shuffledClips : arrangeBySimilarity(shuffledClips)), [view]);
 
-  // Re-grouping/filtering changes the spatial layout — snap back to the origin
-  // and drop any open focus so the new arrangement reads from the top.
+  // Re-grouping changes the spatial layout — snap back to the origin and drop any open focus so the
+  // new arrangement reads from the top.
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally keyed on `view` to fire on change; the body reads no reactive values.
   React.useEffect(() => {
     unfocusTile();
@@ -80,16 +77,18 @@ function App() {
     document.body.style.background = bgColor;
   }, [bgColor]);
 
-  // Prefetch posters into the browser/CDN cache so the canvas composes from cache and zoom-out/pan
-  // never trigger a network load storm. Two phases: the first-screen posters gate the loader (a
-  // ~50-image wait, not ~570); the remainder warm in the background once the canvas is revealed.
+  React.useEffect(installKioskBehaviour, []);
+
+  // Two phases. The first screen is decoded into real textures and gates the loader. The long tail
+  // is only HTTP-warmed, and on the web build not until the visitor has had a moment to look around
+  // — at full concurrency it used to saturate the connection during the first pan.
   React.useEffect(() => {
+    let cancelled = false;
     let finished = false;
     const finish = () => {
-      if (!finished) {
-        finished = true;
-        setReady(true);
-      }
+      if (finished) return;
+      finished = true;
+      setReady(true);
     };
     const timer = setTimeout(finish, MAX_LOAD_MS);
 
@@ -98,22 +97,38 @@ function App() {
     const visibleSet = new Set(visible);
     const rest = allUrls.filter((u) => !visibleSet.has(u));
 
-    prefetchImages(visible, (loaded, total) => {
-      setProgress(total ? loaded / total : 1);
-    }).then(() => {
+    const gated = RUNTIME.preloadAllPosters
+      ? // Kiosk: assets are on local disk, so the whole library can be warmed before the loader
+        // lifts and nothing ever pops in mid-show.
+        preparePosters(visible, (l, t) => setLoadProgress(t ? (l / t) * 0.4 : 1)).then(() =>
+          warmPosters(rest, (l, t) => setLoadProgress(t ? 0.4 + (l / t) * 0.6 : 1), RUNTIME.prefetchConcurrency)
+        )
+      : preparePosters(visible, (l, t) => setLoadProgress(t ? l / t : 1));
+
+    gated.then(() => {
+      if (cancelled) return;
       clearTimeout(timer);
       finish();
-      // Background phase: no progress UI, just warm the cache for later pans.
-      prefetchImages(rest, () => {});
+      if (RUNTIME.preloadAllPosters) return;
+      const delay = RUNTIME.backgroundPrefetchDelayMs;
+      const start = () => {
+        if (!cancelled) warmPosters(rest, () => {}, RUNTIME.prefetchConcurrency);
+      };
+      if (delay > 0) setTimeout(start, delay);
+      else start();
     });
-    return () => clearTimeout(timer);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [clips]);
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
-      <Scene clips={clips} bgColor={bgColor} />
+      <MemoScene clips={clips} bgColor={bgColor} />
       <Chrome clips={clips} darkMode={darkMode} onToggleDark={() => setDarkMode((d) => !d)} view={view} onChangeView={setView} />
-      <LoadingScreen progress={progress} done={ready} />
+      <LoadingScreen done={ready} />
     </div>
   );
 }

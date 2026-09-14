@@ -1,20 +1,36 @@
-import * as React from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { INITIAL_CAM_Z, MIN_CAM_Z, MAX_CAM_Z, IS_MOBILE } from "../theme";
-import { cameraState, unfocusTile, setRequestRender } from "./camera-state";
-import { Grid } from "./Grid";
+import * as React from "react";
+import { RUNTIME } from "../runtime";
+import { CAMERA_FOV, INITIAL_CAM_Z, MAX_CAM_Z, MIN_CAM_Z } from "../theme";
 import type { ClipData } from "../types";
+import { cancelAttract, updateAttract } from "./attract";
+import { cameraState, markInput, setRequestRender, unfocusTile } from "./camera-state";
+import { Grid } from "./Grid";
 
-const VELOCITY_LERP = 0.10;
-const VELOCITY_DECAY = 0.85;
-const MAX_VEL = 1.8;
-const SCROLL_SENSITIVITY = 0.0025;
-const DRAG_SENSITIVITY = 0.012;
-const TOUCH_DRAG_SENSITIVITY = 0.010;
+// All motion constants are per-second, not per-frame.
+//
+// The previous version added raw velocity to the camera position once per frame with no delta term,
+// which made pan and zoom speed scale with refresh rate — 2x faster on a 120Hz display, and slower
+// on a machine that was already struggling, which fed back on itself. Worse, the old cap of 1.8
+// units/frame exceeded TILE_SPACING (1.568), so a hard fling crossed a tile boundary every single
+// frame and forced the grid to rebuild its visible window on the frame that could least afford it.
+//
+// MAX_VEL is now chosen so that one frame at 60Hz always covers less than one tile:
+//   55 / 60 = 0.92 world units < TILE_SPACING (1.568)
+const MAX_VEL = 55;
+const VEL_APPROACH = 6.3;
+const TARGET_DECAY = 9.8;
+const SCROLL_TRANSFER = 21;
+const DRAG_SENSITIVITY = 0.72;
+const TOUCH_DRAG_SENSITIVITY = 0.6;
+const SCROLL_SENSITIVITY = 0.15;
 const CLICK_THRESHOLD = 5;
 const TOUCH_CLICK_THRESHOLD = 15;
-// Below this, free-nav velocity/scroll is treated as settled and the demand loop stops requesting frames.
-const MOTION_EPS = 1e-4;
+// Below this (world units/second) motion is treated as settled and the demand loop stops asking
+// for frames.
+const MOTION_EPS = 0.01;
+
+const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
 
 function getTouchDistance(touches: TouchList): number {
   if (touches.length < 2) return 0;
@@ -24,26 +40,18 @@ function getTouchDistance(touches: TouchList): number {
 }
 
 function CameraController() {
-  const { camera, invalidate } = useThree();
+  const camera = useThree((s) => s.camera);
+  const invalidate = useThree((s) => s.invalidate);
+  const gl = useThree((s) => s.gl);
   const maxDragDist = React.useRef(0);
 
   React.useEffect(() => {
-    // Let focus/unfocus (fired from React handlers outside the loop) kick the demand frameloop.
+    // Focus/unfocus fire from React handlers outside the loop, so they need a way to kick the
+    // demand frameloop or their animation would never advance.
     setRequestRender(invalidate);
-    const body = document.body;
 
-    const onMouseDown = (e: MouseEvent) => {
-      cameraState.isDragging = false;
-      maxDragDist.current = 0;
-      cameraState.lastMouse = { x: e.clientX, y: e.clientY };
-      body.style.cursor = "grabbing";
-      // Disable R3F pointer events during drag — eliminates intersection tests against
-      // all visible tiles on every mousemove. Panning uses window-level mousemove
-      // (captured below) so disabling canvas pointer events doesn't break velocity.
-      (e.currentTarget as HTMLElement).style.pointerEvents = "none";
-      window.addEventListener("mousemove", onMouseMove);
-      window.addEventListener("mouseup", onMouseUp);
-    };
+    const canvas = gl.domElement;
+    const body = document.body;
 
     const onMouseMove = (e: MouseEvent) => {
       const dx = e.clientX - cameraState.lastMouse.x;
@@ -54,27 +62,52 @@ function CameraController() {
       if (cameraState.isDragging) {
         cameraState.targetVel.x -= dx * DRAG_SENSITIVITY;
         cameraState.targetVel.y += dy * DRAG_SENSITIVITY;
-        cameraState.lastMouse = { x: e.clientX, y: e.clientY };
+        // Mutated in place: this fires up to 144 times a second.
+        cameraState.lastMouse.x = e.clientX;
+        cameraState.lastMouse.y = e.clientY;
+        markInput();
+        cancelAttract();
         invalidate();
       }
     };
 
     const onMouseUp = () => {
       body.style.cursor = "";
-      const canvas = document.querySelector("canvas") as HTMLCanvasElement | null;
-      if (canvas) canvas.style.pointerEvents = "";
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
-      setTimeout(() => { cameraState.isDragging = false; }, 0);
+      // Cleared after the click event has been dispatched, so a drag that ends over a tile is not
+      // mistaken for a click on it.
+      setTimeout(() => {
+        cameraState.isDragging = false;
+      }, 0);
+    };
+
+    const onMouseDown = (e: MouseEvent) => {
+      cameraState.isDragging = false;
+      maxDragDist.current = 0;
+      cameraState.lastMouse.x = e.clientX;
+      cameraState.lastMouse.y = e.clientY;
+      body.style.cursor = "grabbing";
+      markInput();
+      cancelAttract();
+      // Panning is tracked on window so a drag that leaves the canvas still lands. There is no
+      // longer any need to disable canvas pointer events during a drag: tile hit-testing is
+      // arithmetic now, not raycasting, so a mousemove costs nothing to ignore.
+      window.addEventListener("mousemove", onMouseMove);
+      window.addEventListener("mouseup", onMouseUp);
     };
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       cameraState.scrollAccum += e.deltaY * SCROLL_SENSITIVITY;
+      markInput();
+      cancelAttract();
       invalidate();
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
+      markInput();
+      cancelAttract();
       if (e.key === "Escape") {
         unfocusTile();
         invalidate();
@@ -84,8 +117,11 @@ function CameraController() {
     const onTouchStart = (e: TouchEvent) => {
       cameraState.isDragging = false;
       maxDragDist.current = 0;
+      markInput();
+      cancelAttract();
       if (e.touches.length === 1) {
-        cameraState.lastTouchPos = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        cameraState.lastTouchPos.x = e.touches[0].clientX;
+        cameraState.lastTouchPos.y = e.touches[0].clientY;
       } else if (e.touches.length === 2) {
         cameraState.lastTouchDist = getTouchDistance(e.touches);
       }
@@ -93,6 +129,7 @@ function CameraController() {
 
     const onTouchMove = (e: TouchEvent) => {
       e.preventDefault();
+      markInput();
       if (e.touches.length === 1) {
         const dx = e.touches[0].clientX - cameraState.lastTouchPos.x;
         const dy = e.touches[0].clientY - cameraState.lastTouchPos.y;
@@ -103,7 +140,8 @@ function CameraController() {
           cameraState.targetVel.x -= dx * TOUCH_DRAG_SENSITIVITY;
           cameraState.targetVel.y += dy * TOUCH_DRAG_SENSITIVITY;
         }
-        cameraState.lastTouchPos = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        cameraState.lastTouchPos.x = e.touches[0].clientX;
+        cameraState.lastTouchPos.y = e.touches[0].clientY;
       } else if (e.touches.length === 2) {
         const dist = getTouchDistance(e.touches);
         cameraState.scrollAccum += (cameraState.lastTouchDist - dist) * SCROLL_SENSITIVITY;
@@ -112,66 +150,97 @@ function CameraController() {
       invalidate();
     };
 
-    const onTouchEnd = () => { setTimeout(() => { cameraState.isDragging = false; }, 0); };
+    const onTouchEnd = () => {
+      setTimeout(() => {
+        cameraState.isDragging = false;
+      }, 0);
+    };
 
-    const canvas = document.querySelector("canvas");
-    canvas?.addEventListener("mousedown", onMouseDown);
-    canvas?.addEventListener("wheel", onWheel, { passive: false });
-    canvas?.addEventListener("touchstart", onTouchStart, { passive: true });
-    canvas?.addEventListener("touchmove", onTouchMove, { passive: false });
-    canvas?.addEventListener("touchend", onTouchEnd, { passive: true });
+    canvas.addEventListener("mousedown", onMouseDown);
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    canvas.addEventListener("touchstart", onTouchStart, { passive: true });
+    canvas.addEventListener("touchmove", onTouchMove, { passive: false });
+    canvas.addEventListener("touchend", onTouchEnd, { passive: true });
     window.addEventListener("keydown", onKeyDown);
 
     return () => {
-      canvas?.removeEventListener("mousedown", onMouseDown);
-      canvas?.removeEventListener("wheel", onWheel);
-      canvas?.removeEventListener("touchstart", onTouchStart);
-      canvas?.removeEventListener("touchmove", onTouchMove);
-      canvas?.removeEventListener("touchend", onTouchEnd);
+      canvas.removeEventListener("mousedown", onMouseDown);
+      canvas.removeEventListener("wheel", onWheel);
+      canvas.removeEventListener("touchstart", onTouchStart);
+      canvas.removeEventListener("touchmove", onTouchMove);
+      canvas.removeEventListener("touchend", onTouchEnd);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
     };
-  }, []);
+  }, [gl, invalidate]);
 
-  useFrame(() => {
-    if (cameraState.focusedTileId === null) {
-      // Free nav: velocity physics
-      cameraState.targetVel.z += cameraState.scrollAccum;
-      cameraState.scrollAccum *= 0.7;
+  useFrame((_state, rawDelta) => {
+    // The demand frameloop can hand back an arbitrarily long delta after an idle gap; unclamped,
+    // that would teleport the camera on the first frame of a new interaction.
+    const delta = Math.min(rawDelta, 1 / 30);
+    const now = performance.now();
+    const { pos, vel, targetVel } = cameraState;
 
-      cameraState.targetVel.x = Math.max(-MAX_VEL, Math.min(MAX_VEL, cameraState.targetVel.x));
-      cameraState.targetVel.y = Math.max(-MAX_VEL, Math.min(MAX_VEL, cameraState.targetVel.y));
-      cameraState.targetVel.z = Math.max(-MAX_VEL, Math.min(MAX_VEL, cameraState.targetVel.z));
-
-      cameraState.vel.x += (cameraState.targetVel.x - cameraState.vel.x) * VELOCITY_LERP;
-      cameraState.vel.y += (cameraState.targetVel.y - cameraState.vel.y) * VELOCITY_LERP;
-      cameraState.vel.z += (cameraState.targetVel.z - cameraState.vel.z) * VELOCITY_LERP;
-
-      cameraState.pos.x += cameraState.vel.x;
-      cameraState.pos.y += cameraState.vel.y;
-      cameraState.pos.z = Math.max(MIN_CAM_Z, Math.min(MAX_CAM_Z, cameraState.pos.z + cameraState.vel.z));
-
-      cameraState.targetVel.x *= VELOCITY_DECAY;
-      cameraState.targetVel.y *= VELOCITY_DECAY;
-      cameraState.targetVel.z *= VELOCITY_DECAY;
-
-      cameraState.animTarget.copy(cameraState.pos);
-      camera.position.set(cameraState.pos.x, cameraState.pos.y, cameraState.pos.z);
-
-      // Demand frameloop: keep rendering only while there's residual motion.
-      const v = cameraState.vel;
-      const tv = cameraState.targetVel;
-      if (
-        Math.abs(v.x) > MOTION_EPS || Math.abs(v.y) > MOTION_EPS || Math.abs(v.z) > MOTION_EPS ||
-        Math.abs(tv.x) > MOTION_EPS || Math.abs(tv.y) > MOTION_EPS || Math.abs(tv.z) > MOTION_EPS ||
-        Math.abs(cameraState.scrollAccum) > MOTION_EPS
-      ) {
-        invalidate();
-      }
-    } else {
+    if (cameraState.focusedTileId !== null) {
       // Overlay open: lock panning and zoom while the video plays full-screen.
       cameraState.scrollAccum = 0;
+      vel.set(0, 0, 0);
+      targetVel.set(0, 0, 0);
+      return;
+    }
+
+    // Hand accumulated wheel delta to the zoom axis over time rather than all at once, so a single
+    // notch still eases instead of stepping.
+    const transfer = 1 - Math.exp(-SCROLL_TRANSFER * delta);
+    const dz = cameraState.scrollAccum * transfer;
+    targetVel.z += dz;
+    cameraState.scrollAccum -= dz;
+
+    targetVel.x = clamp(targetVel.x, -MAX_VEL, MAX_VEL);
+    targetVel.y = clamp(targetVel.y, -MAX_VEL, MAX_VEL);
+    targetVel.z = clamp(targetVel.z, -MAX_VEL, MAX_VEL);
+
+    const approach = 1 - Math.exp(-VEL_APPROACH * delta);
+    vel.x += (targetVel.x - vel.x) * approach;
+    vel.y += (targetVel.y - vel.y) * approach;
+    vel.z += (targetVel.z - vel.z) * approach;
+
+    pos.x += vel.x * delta;
+    pos.y += vel.y * delta;
+
+    const nextZ = clamp(pos.z + vel.z * delta, MIN_CAM_Z, MAX_CAM_Z);
+    // At a zoom limit, drop the velocity instead of letting it accumulate against the clamp —
+    // otherwise the zoom "sticks" and needs an equal scroll back before it responds.
+    if (nextZ === pos.z && vel.z !== 0) {
+      vel.z = 0;
+      targetVel.z = 0;
+      cameraState.scrollAccum = 0;
+    }
+    pos.z = nextZ;
+
+    const decay = Math.exp(-TARGET_DECAY * delta);
+    targetVel.x *= decay;
+    targetVel.y *= decay;
+    targetVel.z *= decay;
+
+    const drifted = updateAttract(now, delta);
+
+    cameraState.animTarget.copy(pos);
+    camera.position.set(pos.x, pos.y, pos.z);
+
+    // Demand frameloop: keep rendering only while there is residual motion left to show.
+    if (
+      drifted ||
+      Math.abs(vel.x) > MOTION_EPS ||
+      Math.abs(vel.y) > MOTION_EPS ||
+      Math.abs(vel.z) > MOTION_EPS ||
+      Math.abs(targetVel.x) > MOTION_EPS ||
+      Math.abs(targetVel.y) > MOTION_EPS ||
+      Math.abs(targetVel.z) > MOTION_EPS ||
+      Math.abs(cameraState.scrollAccum) > MOTION_EPS
+    ) {
+      invalidate();
     }
   });
 
@@ -187,10 +256,14 @@ export function Scene({ clips, bgColor }: SceneProps) {
   return (
     <Canvas
       frameloop="demand"
-      camera={{ position: [0, 0, INITIAL_CAM_Z], fov: 45, near: 0.1, far: 1000 }}
-      gl={{ antialias: false, powerPreference: "high-performance", alpha: false }}
-      dpr={Math.min(typeof window !== "undefined" ? window.devicePixelRatio : 1, IS_MOBILE ? 1 : 1.5)}
-      onPointerMissed={unfocusTile}
+      // `flat` keeps R3F from installing ACESFilmic tone mapping. Every material already opted out
+      // per-material; this states the intent once instead.
+      flat
+      camera={{ position: [0, 0, INITIAL_CAM_Z], fov: CAMERA_FOV, near: 0.1, far: 100 }}
+      gl={{ antialias: false, powerPreference: "high-performance", alpha: false, stencil: false }}
+      // A [min, max] range rather than a fixed scalar, so R3F clamps the real device ratio instead
+      // of being recomputed on every parent re-render.
+      dpr={[1, RUNTIME.maxDpr]}
     >
       <color attach="background" args={[bgColor]} />
       <CameraController />

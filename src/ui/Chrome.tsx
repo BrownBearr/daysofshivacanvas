@@ -1,9 +1,9 @@
 import * as React from "react";
-import { cameraState, unfocusTile } from "../canvas/camera-state";
+import { cameraState, subscribeFocus, subscribeHover, unfocusTile } from "../canvas/camera-state";
 import { muteState } from "../canvas/mute-state";
-import { sourceUrl } from "../lib/clip-source";
 import { SHUFFLE_VIEW, SIMILARITY_VIEW } from "../lib/clip-order";
-import { videoPool } from "../lib/video-pool";
+import { sourceUrl } from "../lib/clip-source";
+import { RUNTIME } from "../runtime";
 import type { ClipData } from "../types";
 
 interface ChromeProps {
@@ -99,6 +99,29 @@ function VolumeIcon({ volume }: { volume: number }) {
   );
 }
 
+const WELCOME_SEEN_KEY = "daysofshiva:welcome-seen";
+
+// Shown once per visitor, not once per page load: it used to mount at zIndex 100 on top of the
+// zIndex 50 loading screen, so two full-screen overlays composited over the canvas through the
+// entire load. Never shown on a kiosk, where nobody is there to dismiss it.
+function shouldShowWelcome(): boolean {
+  if (!RUNTIME.welcomeModal) return false;
+  try {
+    return localStorage.getItem(WELCOME_SEEN_KEY) === null;
+  } catch {
+    // Private mode / blocked storage: better to show it than to crash.
+    return true;
+  }
+}
+
+function markWelcomeSeen(): void {
+  try {
+    localStorage.setItem(WELCOME_SEEN_KEY, "1");
+  } catch {
+    // Nothing to do — it will show again next visit, which is the harmless failure.
+  }
+}
+
 const iconBtnStyle: React.CSSProperties = {
   cursor: "pointer",
   background: "none",
@@ -109,13 +132,7 @@ const iconBtnStyle: React.CSSProperties = {
   color: "inherit",
 };
 
-function WelcomeModal({
-  darkMode,
-  onClose,
-}: {
-  darkMode: boolean;
-  onClose: () => void;
-}) {
+function WelcomeModal({ darkMode, onClose }: { darkMode: boolean; onClose: () => void }) {
   const [visible, setVisible] = React.useState(false);
 
   React.useLayoutEffect(() => {
@@ -154,9 +171,9 @@ function WelcomeModal({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: "rgba(0,0,0,0.45)",
-        backdropFilter: "blur(6px)",
-        WebkitBackdropFilter: "blur(6px)",
+        // No backdrop-filter: a full-viewport filter over a WebGL canvas makes the compositor
+        // snapshot the canvas on every recomposite. A slightly heavier flat scrim reads the same.
+        background: "rgba(0,0,0,0.62)",
         opacity: visible ? 1 : 0,
         transition: "opacity 0.25s ease",
         pointerEvents: "auto",
@@ -250,13 +267,7 @@ function WelcomeModal({
   );
 }
 
-function AboutModal({
-  darkMode,
-  onClose,
-}: {
-  darkMode: boolean;
-  onClose: () => void;
-}) {
+function AboutModal({ darkMode, onClose }: { darkMode: boolean; onClose: () => void }) {
   const [visible, setVisible] = React.useState(false);
 
   React.useLayoutEffect(() => {
@@ -287,9 +298,9 @@ function AboutModal({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: "rgba(0,0,0,0.45)",
-        backdropFilter: "blur(6px)",
-        WebkitBackdropFilter: "blur(6px)",
+        // No backdrop-filter: a full-viewport filter over a WebGL canvas makes the compositor
+        // snapshot the canvas on every recomposite. A slightly heavier flat scrim reads the same.
+        background: "rgba(0,0,0,0.62)",
         opacity: visible ? 1 : 0,
         transition: "opacity 0.25s ease",
         pointerEvents: "auto",
@@ -333,9 +344,9 @@ function AboutModal({
 
         <div style={{ fontSize: 17, color: textDim, marginTop: 18, lineHeight: 1.55 }}>
           <p style={{ margin: 0 }}>
-            For the last 4+ years I have been making a work of art everyday. What started out as a simple project of
-            self improvement has grown into a practice of expression, learning and persistence. Every project took real
-            time to create and make and yet as a part of the grid it’s just one of many.
+            For the last 4+ years I have been making a work of art everyday. What started out as a simple project of self
+            improvement has grown into a practice of expression, learning and persistence. Every project took real time to create
+            and make and yet as a part of the grid it’s just one of many.
           </p>
           <p style={{ margin: "14px 0 0" }}>
             The site does not contain all the work I have made but it’s all present on my Instagram{" "}
@@ -350,8 +361,8 @@ function AboutModal({
             .
           </p>
           <p style={{ margin: "14px 0 0" }}>
-            My message to you the reader is that if you want to grow and learn and make, you can, it just takes 5 minutes
-            over a longer period of time.
+            My message to you the reader is that if you want to grow and learn and make, you can, it just takes 5 minutes over a
+            longer period of time.
           </p>
         </div>
       </div>
@@ -390,9 +401,9 @@ function VideoOverlay({ clip, muted, volume }: { clip: ClipData; muted: boolean;
         alignItems: "center",
         justifyContent: "center",
         // Semi-transparent + blur so the grid is visible but softened behind
-        background: "rgba(0,0,0,0.55)",
-        backdropFilter: "blur(18px)",
-        WebkitBackdropFilter: "blur(18px)",
+        // Flat scrim rather than backdrop-filter: this one overlays a playing full-screen video,
+        // where forcing a canvas snapshot per composite is the most expensive thing on the page.
+        background: "rgba(0,0,0,0.82)",
         opacity: visible ? 1 : 0,
         transition: "opacity 0.2s ease",
         pointerEvents: "auto",
@@ -426,19 +437,24 @@ export function Chrome({ clips, darkMode, onToggleDark, view, onChangeView }: Ch
   const [focusedClip, setFocusedClip] = React.useState<ClipData | null>(cameraState.focusedClip);
   const [hoveredName, setHoveredName] = React.useState<string | null>(cameraState.hoveredClipName);
   const [showHelp, setShowHelp] = React.useState(false);
-  const [showWelcome, setShowWelcome] = React.useState(true);
+  const [showWelcome, setShowWelcome] = React.useState(shouldShowWelcome);
   const [showAbout, setShowAbout] = React.useState(false);
   const [muted, setMuted] = React.useState(muteState.muted);
   const [volume, setVolume] = React.useState(muteState.volume);
 
-  React.useEffect(() => {
-    const id = setInterval(() => {
-      setFocusedName(cameraState.focusedClipName);
-      setFocusedClip(cameraState.focusedClip);
-      setHoveredName(cameraState.hoveredClipName);
-    }, 50);
-    return () => clearInterval(id);
-  }, []);
+  // Event-driven instead of a 50ms poll. The poll re-rendered this whole tree (both bars, every
+  // inline SVG, the select and the slider) up to 20 times a second, and made the hover label lag the
+  // cursor by up to 50ms — which read as the canvas itself being sluggish.
+  React.useEffect(
+    () =>
+      subscribeFocus(() => {
+        setFocusedName(cameraState.focusedClipName);
+        setFocusedClip(cameraState.focusedClip);
+      }),
+    []
+  );
+
+  React.useEffect(() => subscribeHover(() => setHoveredName(cameraState.hoveredClipName)), []);
 
   function toggleMute() {
     muteState.muted = !muteState.muted;
@@ -447,7 +463,6 @@ export function Chrome({ clips, darkMode, onToggleDark, view, onChangeView }: Ch
 
   function changeVolume(v: number) {
     muteState.volume = v;
-    videoPool.setAllVolume(v);
     setVolume(v);
     // Dragging above 0 should be audible, so clear mute if it was on.
     if (v > 0 && muteState.muted) {
@@ -475,7 +490,15 @@ export function Chrome({ clips, darkMode, onToggleDark, view, onChangeView }: Ch
       style={{ fontFamily: "'Darker Grotesque', Inter, system-ui, sans-serif", color: text }}
     >
       {/* Welcome modal — shown once on load, dismissible by button, backdrop, or Esc */}
-      {showWelcome && <WelcomeModal darkMode={darkMode} onClose={() => setShowWelcome(false)} />}
+      {showWelcome && (
+        <WelcomeModal
+          darkMode={darkMode}
+          onClose={() => {
+            markWelcomeSeen();
+            setShowWelcome(false);
+          }}
+        />
+      )}
 
       {/* About modal — opened from the top bar */}
       {showAbout && <AboutModal darkMode={darkMode} onClose={() => setShowAbout(false)} />}
@@ -588,7 +611,6 @@ export function Chrome({ clips, darkMode, onToggleDark, view, onChangeView }: Ch
               style={{
                 bottom: "calc(100% + 10px)",
                 background: helpBg,
-                backdropFilter: "blur(8px)",
                 border: `1px solid ${helpBorder}`,
                 borderRadius: 8,
                 padding: "10px 14px",

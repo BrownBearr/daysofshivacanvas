@@ -12,15 +12,18 @@
     "clips:cors": "node scripts/normalize-b2.mjs --cors-only",
     "clips:dry": "node scripts/normalize-b2.mjs --dry-run",
     "clips:normalize": "node scripts/normalize-b2.mjs",
-    "clips:manifest": "node scripts/normalize-b2.mjs --manifest-only"
+    "clips:manifest": "node scripts/normalize-b2.mjs --manifest-only",
+    "kiosk": "npm run build:kiosk && node scripts/serve-kiosk.mjs",
+    "build:kiosk": "VITE_TARGET=kiosk VITE_CDN_BASE=/clips tsc -b && VITE_TARGET=kiosk VITE_CDN_BASE=/clips vite build",
+    "bench": "node scripts/bench.mjs",
+    "clips:mirror": "node scripts/mirror-local.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "clips:grid-posters": "node scripts/make-grid-posters.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1053.0",
-    "@react-spring/three": "^10.1.0",
-    "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.6.1",
     "@tailwindcss/vite": "^4.3.0",
-    "maath": "^0.10.8",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "tailwindcss": "^4.3.0",
