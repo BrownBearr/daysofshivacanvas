@@ -12,11 +12,13 @@ import * as THREE from "three";
 //     TextureLoader load, and the second one to finish overwrote the first in the map without
 //     disposing it — an unreachable, never-freed texture.
 //  3. HTTP-only warming. `warm()` fetches without decoding, so prefetching the whole library
-//     costs bandwidth but not 566 decoded bitmaps in memory.
+//     costs bandwidth but not a decoded bitmap per clip held in memory.
 
 interface Entry {
   texture: THREE.Texture;
   refs: number;
+  /** Approximate GPU cost in bytes, including the mipmap chain. */
+  bytes: number;
 }
 
 const loader = new THREE.TextureLoader();
@@ -50,13 +52,34 @@ const cache = new Map<string, Entry>();
 const inFlight = new Map<string, Promise<THREE.Texture>>();
 const warmed = new Set<string>();
 
-// Bounded by the caller once the worst-case visible tile count is known (see Grid). Posters are
-// ~712x400, so a texture with mipmaps is ~1.5MB — the cap is real VRAM, not a formality.
+// Two independent limits, because poster dimensions are not uniform in practice.
+//
+// `cap` is the count, set by Grid from the worst-case visible tile count. `byteBudget` exists
+// because a count alone is not a bound on anything that matters: normalized posters are 712x400
+// (~1.5MB with mipmaps) but the library also contains un-resized 1920x1080 originals at ~11MB
+// each, so a 320-entry cache can mean 0.5GB or 3.5GB of VRAM depending on which clips you panned
+// past. Whichever limit binds first wins.
 let cap = 320;
+let byteBudget = 512 * 1024 * 1024;
+let bytesHeld = 0;
 
 export function setPosterCacheCap(next: number): void {
   cap = Math.max(32, next);
   evict();
+}
+
+export function setPosterByteBudget(next: number): void {
+  byteBudget = Math.max(64 * 1024 * 1024, next);
+  evict();
+}
+
+// width * height * RGBA, plus ~1/3 again for the mipmap chain.
+function estimateBytes(tex: THREE.Texture): number {
+  const img = tex.image as { width?: number; height?: number } | undefined;
+  const w = img?.width ?? 0;
+  const h = img?.height ?? 0;
+  if (!w || !h) return 4;
+  return Math.round(w * h * 4 * 1.34);
 }
 
 /** "cover" crop: fill a square from any aspect by trimming the longer axis. */
@@ -85,11 +108,12 @@ function touch(url: string, entry: Entry): void {
 // Evict from the front (oldest) but skip anything a live tile still holds. A held texture that
 // falls out of the window gets its chance the next time eviction runs, after it's released.
 function evict(): void {
-  if (cache.size <= cap) return;
+  if (cache.size <= cap && bytesHeld <= byteBudget) return;
   for (const [url, entry] of cache) {
-    if (cache.size <= cap) break;
+    if (cache.size <= cap && bytesHeld <= byteBudget) break;
     if (entry.refs > 0) continue;
     cache.delete(url);
+    bytesHeld -= entry.bytes;
     entry.texture.dispose();
   }
 }
@@ -154,7 +178,9 @@ export function acquirePoster(url: string): Promise<THREE.Texture> {
         if (existing.texture !== tex) tex.dispose();
         return existing.texture;
       }
-      cache.set(url, { texture: tex, refs: 0 });
+      const bytes = estimateBytes(tex);
+      cache.set(url, { texture: tex, refs: 0, bytes });
+      bytesHeld += bytes;
       evict();
       return tex;
     });
@@ -180,7 +206,7 @@ export function releasePoster(url: string): void {
 /**
  * Warm the HTTP cache for a poster without decoding it or holding a bitmap. Used for the
  * long tail of the library: `new Image()` would force a decode and retain ~1MB per poster,
- * which across 566 clips is hundreds of MB for images that may never be looked at.
+ * which across the whole library is hundreds of MB for images that may never be looked at.
  */
 export function warmPoster(url: string): Promise<void> {
   if (warmed.has(url) || cache.has(url)) return Promise.resolve();
@@ -193,8 +219,20 @@ export function warmPoster(url: string): Promise<void> {
     });
 }
 
-export function posterCacheStats(): { size: number; held: number; cap: number } {
+export function posterCacheStats(): {
+  size: number;
+  held: number;
+  cap: number;
+  megabytes: number;
+  budgetMb: number;
+} {
   let held = 0;
   for (const e of cache.values()) if (e.refs > 0) held++;
-  return { size: cache.size, held, cap };
+  return {
+    size: cache.size,
+    held,
+    cap,
+    megabytes: Math.round(bytesHeld / 1e5) / 10,
+    budgetMb: Math.round(byteBudget / 1e6),
+  };
 }

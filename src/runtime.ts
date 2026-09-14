@@ -39,6 +39,8 @@ interface RuntimeConfig {
   poolSize: number;
   /** Upper bound on the device-pixel-ratio R3F renders at. */
   maxDpr: number;
+  /** Ceiling on poster-texture VRAM. The real bound on the cache — see poster-cache.ts. */
+  posterBudgetMb: number;
   /** Prefetch every poster behind the loading screen instead of just the first screen.
    *  Only sane when the assets are local. */
   preloadAllPosters: boolean;
@@ -62,6 +64,7 @@ interface RuntimeConfig {
 const web: RuntimeConfig = {
   poolSize: IS_MOBILE ? 2 : 4,
   maxDpr: IS_MOBILE ? 1 : 1.5,
+  posterBudgetMb: IS_MOBILE ? 192 : 512,
   preloadAllPosters: false,
   prefetchConcurrency: IS_MOBILE ? 4 : 6,
   backgroundPrefetchDelayMs: 2500,
@@ -75,6 +78,7 @@ const web: RuntimeConfig = {
 const kiosk: RuntimeConfig = {
   poolSize: 10,
   maxDpr: 2,
+  posterBudgetMb: 1024,
   preloadAllPosters: true,
   prefetchConcurrency: 16,
   backgroundPrefetchDelayMs: 0,

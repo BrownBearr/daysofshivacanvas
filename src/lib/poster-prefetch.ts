@@ -23,7 +23,7 @@ export function preparePosters(
 
 /**
  * Warm the HTTP cache for the rest of the library. This deliberately does not decode: `new Image()`
- * on all ~566 posters would retain that many decoded bitmaps (~1MB each) for images the visitor may
+ * on every poster in the library would retain that many decoded bitmaps (~1MB each) for images the visitor may
  * never pan to.
  */
 export function warmPosters(urls: string[], onProgress: (loaded: number, total: number) => void, concurrency = 6): Promise<void> {

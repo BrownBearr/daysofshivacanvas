@@ -6,7 +6,7 @@ Standing instructions for all future sessions on this repo.
 
 ## What this is
 
-`daysofshiva` — an infinite-canvas video archive for a daily creative practice (566 numbered clips,
+`daysofshiva` — an infinite-canvas video archive for a daily creative practice (630 numbered clips,
 served from Backblaze B2). React 19 + React Three Fiber, deployed at days.shivav.space.
 
 Ships in **two runtime targets** from one codebase (`src/runtime.ts`):
@@ -36,7 +36,7 @@ src/
   runtime.ts            # web vs kiosk target + every tunable that differs between them
   theme.ts              # layout + camera constants
   types.ts              # ClipData
-  data/clips.json       # 566-clip manifest (name only; URLs derived in lib/clip-source)
+  data/clips.json       # clip manifest (name only; URLs derived in lib/clip-source)
   data/clip-order.json  # precomputed similarity ordering
   canvas/
     Scene.tsx           # <Canvas> + CameraController (delta-scaled inertia pan/zoom)

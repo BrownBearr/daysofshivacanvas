@@ -1,7 +1,7 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import * as React from "react";
-import { setPosterCacheCap } from "../lib/poster-cache";
-import { IS_MOBILE } from "../runtime";
+import { setPosterByteBudget, setPosterCacheCap } from "../lib/poster-cache";
+import { IS_MOBILE, RUNTIME } from "../runtime";
 import { CAMERA_FOV, GRID_COLS, HOVER_SCALE, MAX_CAM_Z, TILE_H, TILE_SPACING, TILE_W, VISIBLE_MARGIN_TILES } from "../theme";
 import type { ClipData } from "../types";
 import { cameraState, focusTile, markInput, setHover, unfocusTile } from "./camera-state";
@@ -66,10 +66,12 @@ export function Grid({ clips }: { clips: ClipData[] }) {
     return { cols, rows: rowCount, count: cols * rowCount };
   }, [size.width, size.height]);
 
-  // Poster textures are ~1.5MB each with mipmaps, so the cap is real VRAM. It has to clear the
-  // worst-case visible count or eviction would fight the live grid.
+  // The count cap has to clear the worst-case visible tile count or eviction would fight the live
+  // grid. The byte budget is the one that actually bounds VRAM, because poster dimensions are not
+  // uniform across the library — see poster-cache.ts.
   React.useEffect(() => {
     setPosterCacheCap(dims.count + 48);
+    setPosterByteBudget(RUNTIME.posterBudgetMb * 1024 * 1024);
   }, [dims.count]);
 
   React.useEffect(() => stopVideo, []);

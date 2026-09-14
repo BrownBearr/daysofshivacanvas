@@ -35,6 +35,6 @@
     }
   },
   "files": {
-    "includes": ["**", "!node_modules", "!dist"]
+    "includes": ["**", "!node_modules", "!dist", "!bench", "!local-clips", "!scripts/.cache"]
   }
 }
