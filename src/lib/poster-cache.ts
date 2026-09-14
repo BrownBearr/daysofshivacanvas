@@ -36,9 +36,12 @@ function loadViaImageBitmap(url: string): Promise<THREE.Texture> {
       if (!r.ok) throw new Error(`${r.status}`);
       return r.blob();
     })
-    .then((blob) => createImageBitmap(blob))
+    // WebGL ignores UNPACK_FLIP_Y for ImageBitmap sources, so Three's default flipY does nothing
+    // and posters render upside down. Flip at decode time instead, and turn flipY off.
+    .then((blob) => createImageBitmap(blob, { imageOrientation: "flipY" }))
     .then((bitmap) => {
       const tex = new THREE.Texture(bitmap as unknown as HTMLImageElement);
+      tex.flipY = false;
       // Three needs telling that the source is a bitmap, or it treats it as a DOM image.
       (tex as unknown as { isVideoTexture?: boolean }).isVideoTexture = false;
       tex.needsUpdate = true;
