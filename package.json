@@ -13,31 +13,34 @@
     "clips:dry": "node scripts/normalize-b2.mjs --dry-run",
     "clips:normalize": "node scripts/normalize-b2.mjs",
     "clips:manifest": "node scripts/normalize-b2.mjs --manifest-only",
-    "kiosk": "npm run build:kiosk && node scripts/serve-kiosk.mjs",
-    "build:kiosk": "VITE_TARGET=kiosk VITE_CDN_BASE=/clips tsc -b && VITE_TARGET=kiosk VITE_CDN_BASE=/clips vite build",
     "bench": "node scripts/bench.mjs",
-    "clips:mirror": "node scripts/mirror-local.mjs",
     "smoke": "node scripts/smoke.mjs",
-    "clips:grid-posters": "node scripts/make-grid-posters.mjs"
+    "clips:grid-posters": "node scripts/make-grid-posters.mjs",
+    "clips:atlas": "node scripts/make-atlas.mjs",
+    "smoke:mobile": "node scripts/smoke-mobile.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1053.0",
+    "@phosphor-icons/react": "^2.1.10",
     "@react-three/fiber": "^9.6.1",
     "@tailwindcss/vite": "^4.3.0",
+    "motion": "^13.4.4",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "tailwindcss": "^4.3.0",
-    "three": "^0.184.0"
+    "three": "^0.184.0",
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.15",
-    "@types/react": "^18.3.12",
-    "@types/react-dom": "^18.3.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "@types/three": "^0.184.1",
-    "@vitejs/plugin-react": "^4.3.3",
+    "@vitejs/plugin-react": "^5.2.0",
     "globals": "^15.11.0",
     "playwright": "^1.60.0",
-    "typescript": "~5.6.2",
-    "vite": "^5.4.10"
+    "sharp": "^0.35.5",
+    "typescript": "~5.9",
+    "vite": "^7.3.6"
   }
 }

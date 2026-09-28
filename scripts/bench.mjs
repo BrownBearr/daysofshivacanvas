@@ -28,6 +28,7 @@ const HEIGHT = Number(arg("height", 1080));
 // CPU throttle multiplier. This machine renders the canvas at a locked 60fps, which hides
 // everything; throttling stands in for the slower hardware the stutter was reported on.
 const CPU = Number(arg("cpu", 1));
+const RAILS_OFF = args.includes("--no-rails");
 
 // Patched into the page before any app script. Counts GL draw calls and exposes
 // a frame sampler the harness starts/stops around each scripted interaction.
@@ -194,6 +195,8 @@ const run = async () => {
   });
   page.on("pageerror", (e) => consoleErrors.push(`pageerror: ${String(e).slice(0, 200)}`));
 
+  // Skip the first-visit welcome modal (v1 and v2 share the key).
+  await page.addInitScript(() => localStorage.setItem("daysofshiva:welcome-seen", "1"));
   const t0 = Date.now();
   await page.goto(URL, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("canvas", { timeout: 30_000 });
@@ -210,7 +213,8 @@ const run = async () => {
   // Dismiss any modal that gates interaction.
   await page.keyboard.press("Escape");
   await sleep(400);
-  await page.mouse.click(WIDTH / 2, 30); // click the top bar, harmless, focuses the doc
+  // Not a click: in v2 the top of the page is canvas, and a click there opens a clip.
+  await page.mouse.move(WIDTH / 2, HEIGHT / 2);
   await sleep(400);
 
   console.log(`\n[${LABEL}] ${URL}  ${WIDTH}x${HEIGHT}  cpu throttle ${CPU}x`);
@@ -243,6 +247,48 @@ const run = async () => {
       await sleep(2500);
     })
   );
+
+  // v2 only: view morphs and the Cover Flow / card-file rails. Skipped on builds without a dock.
+  if (!RAILS_OFF && (await page.locator('[role="radio"][aria-label="Flow"]').count())) {
+    await page.mouse.move(WIDTH / 2, HEIGHT - 40);
+    results.push(
+      await measure(page, "morph field>flow", async () => {
+        await page.keyboard.press("2");
+        await sleep(1600);
+      })
+    );
+    results.push(
+      await measure(page, "flow scrub", async () => {
+        await page.mouse.move(WIDTH / 2, HEIGHT / 2);
+        for (let i = 0; i < 60; i++) {
+          await page.mouse.wheel(0, i < 30 ? 90 : -90);
+          await sleep(16);
+        }
+        await sleep(800);
+      })
+    );
+    results.push(
+      await measure(page, "morph flow>stack", async () => {
+        await page.keyboard.press("3");
+        await sleep(1600);
+      })
+    );
+    results.push(
+      await measure(page, "stack scrub", async () => {
+        for (let i = 0; i < 40; i++) {
+          await page.mouse.wheel(0, 90);
+          await sleep(16);
+        }
+        await sleep(800);
+      })
+    );
+    results.push(
+      await measure(page, "morph stack>field", async () => {
+        await page.keyboard.press("1");
+        await sleep(1600);
+      })
+    );
+  }
 
   const heap = await page.evaluate(() => performance.memory?.usedJSHeapSize ?? 0);
   console.log(`\n  JS heap ${(heap / 1e6).toFixed(1)} MB`);

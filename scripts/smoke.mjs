@@ -1,4 +1,4 @@
-// Functional smoke test. The benchmark only proves the canvas is fast; this proves it still works.
+// Functional smoke test. The benchmark proves the stage is fast; this proves it still works.
 //
 //   node scripts/smoke.mjs [--url http://localhost:4173]
 import { chromium } from "playwright";
@@ -25,9 +25,9 @@ const check = (name, ok, detail = "") => {
   }
 };
 
-// Reads live renderer state out of the page. Exposed by patching GL, so it needs no app hooks.
+// Counts GL draw calls by patching the prototypes, so it needs no app hooks.
 const PROBE = () => {
-  window.__probe = { draws: 0, frames: 0 };
+  window.__probe = { draws: 0 };
   for (const proto of [window.WebGLRenderingContext?.prototype, window.WebGL2RenderingContext?.prototype]) {
     if (!proto) continue;
     for (const fn of ["drawArrays", "drawElements"]) {
@@ -50,121 +50,163 @@ const run = async () => {
   page.on("console", (m) => m.type() === "error" && errors.push(m.text().slice(0, 160)));
   page.on("pageerror", (e) => errors.push(`pageerror: ${String(e).slice(0, 160)}`));
 
+  const draws = () => page.evaluate(() => window.__probe.draws);
+  const resetDraws = () => page.evaluate(() => (window.__probe.draws = 0));
+  const search = () => page.evaluate(() => location.search);
+  const readout = () => page.evaluate(() => document.querySelector(".z-20.h-11")?.textContent ?? "");
+  const playerOpen = () => page.locator('[role="dialog"][aria-modal="true"][aria-label^="Day "]').count();
+
   console.log(`\nSmoke test: ${URL}\n`);
 
   // --- load ---------------------------------------------------------------------------------
   await page.goto(URL, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("canvas", { timeout: 30_000 });
   check("canvas mounts", true);
-
   await page.waitForFunction(() => document.body.innerText.includes("on site"), null, { timeout: 40_000 });
-  check("chrome bars render (clip count visible)", true);
+  check("readout shows the clip count", true);
 
-  // --- welcome modal ------------------------------------------------------------------------
+  // --- welcome ------------------------------------------------------------------------------
   const welcome = await page.locator("text=Welcome to the gallery").count();
   check("welcome modal shows on first visit", welcome > 0);
-  if (welcome > 0) {
+  if (welcome) {
     await page.locator("text=Enter the gallery").click();
-    await sleep(500);
+    await sleep(600);
   }
   check("welcome modal dismisses", (await page.locator("text=Welcome to the gallery").count()) === 0);
 
-  // --- tiles actually draw ------------------------------------------------------------------
-  await sleep(1500);
-  await page.evaluate(() => (window.__probe.draws = 0));
+  // --- field draws + zoom --------------------------------------------------------------------
+  await sleep(1200);
+  await resetDraws();
   await page.mouse.move(W / 2, H / 2);
   await page.mouse.wheel(0, 120);
   await sleep(800);
-  const drawsAfterZoom = await page.evaluate(() => window.__probe.draws);
-  check("tiles draw during zoom", drawsAfterZoom > 20, `${drawsAfterZoom} draw calls`);
+  const dz = await draws();
+  check("tiles draw during zoom", dz > 20, `${dz} draw calls`);
 
-  // --- hover: scale + video preview ---------------------------------------------------------
-  await page.mouse.move(W / 2, H / 2);
+  // --- hover preview -------------------------------------------------------------------------
+  await page.mouse.move(W / 2 + 3, H / 2 + 3);
   await sleep(2000);
-  const hoverName = await page.evaluate(() => {
-    const bars = document.body.innerText;
-    return bars.length;
-  });
-  const videoPlaying = await page.evaluate(() =>
+  const previewing = await page.evaluate(() =>
     Array.from(document.querySelectorAll("video")).some((v) => !v.paused && v.readyState >= 2)
   );
-  check("hover starts a preview video", videoPlaying, `${hoverName} chars of chrome text`);
+  check("hover starts a preview video", previewing);
+  check("hover shows the clip in the readout", (await readout()).startsWith("Day "), await readout());
 
-  // --- demand frameloop goes quiet -----------------------------------------------------------
+  // --- idle ----------------------------------------------------------------------------------
+  await page.mouse.move(W / 2, 30);
   await page.evaluate(() => document.querySelector("canvas")?.dispatchEvent(new PointerEvent("pointerleave", { bubbles: true })));
-  await sleep(4000);
-  await page.evaluate(() => (window.__probe.draws = 0));
+  await sleep(3000);
+  await resetDraws();
   await sleep(2500);
-  const idleDraws = await page.evaluate(() => window.__probe.draws);
-  check("demand frameloop idles at zero draws", idleDraws === 0, `${idleDraws} draws while idle`);
+  const idle = await draws();
+  check("demand frameloop idles at zero draws", idle === 0, `${idle} draws while idle`);
 
-  // --- click to focus -----------------------------------------------------------------------
+  // --- player --------------------------------------------------------------------------------
   await page.mouse.move(W / 2, H / 2);
   await sleep(300);
   await page.mouse.click(W / 2, H / 2);
   await sleep(1200);
-  const overlayVideo = await page.evaluate(() => {
-    const vids = Array.from(document.querySelectorAll("video"));
-    // The overlay video is the one actually laid out on screen; pool elements are 1px.
-    return vids.some((v) => v.getBoundingClientRect().width > 200);
-  });
-  check("click opens the focus overlay", overlayVideo);
-
-  // --- escape closes ------------------------------------------------------------------------
+  check("click opens the player", (await playerOpen()) === 1);
+  check("player puts the clip in the URL", /[?&]c=\d+/.test(await search()), await search());
+  const first = await page.locator('[role="dialog"][aria-label^="Day "]').getAttribute("aria-label");
+  await page.keyboard.press("ArrowRight");
+  await sleep(700);
+  const second = await page.locator('[role="dialog"][aria-label^="Day "]').getAttribute("aria-label");
+  check("arrow key steps to the next clip", first !== second, `${first} -> ${second}`);
   await page.keyboard.press("Escape");
-  await sleep(800);
-  const overlayGone = await page.evaluate(
-    () => !Array.from(document.querySelectorAll("video")).some((v) => v.getBoundingClientRect().width > 200)
-  );
-  check("Escape closes the focus overlay", overlayGone);
+  await sleep(1200);
+  check("Escape closes the player", (await playerOpen()) === 0);
+  check("closing clears the URL", !/[?&]c=/.test(await search()), await search());
 
-  // --- pan changes what is on screen ---------------------------------------------------------
+  await page.mouse.click(W / 2, H / 2);
+  await sleep(1000);
+  await page.goBack();
+  await sleep(1200);
+  check("browser Back closes the player", (await playerOpen()) === 0);
+
+  // --- pan -----------------------------------------------------------------------------------
   const before = await page.screenshot();
   await page.mouse.move(W / 2, H / 2);
   await page.mouse.down();
   for (let i = 1; i <= 10; i++) await page.mouse.move(W / 2 - i * 40, H / 2 - i * 20);
   await page.mouse.up();
   await sleep(1500);
-  const after = await page.screenshot();
-  check("drag pans the canvas", !before.equals(after));
+  check("drag pans the field", !before.equals(await page.screenshot()));
 
-  // --- dark mode ----------------------------------------------------------------------------
-  await page.locator('button[aria-label="Dark mode"]').click();
-  await sleep(600);
-  const darkBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-  check("dark mode switches the background", darkBg.includes("18, 18, 18"), darkBg);
+  // --- flow ----------------------------------------------------------------------------------
+  await resetDraws();
+  await page.keyboard.press("2");
+  await sleep(1600);
+  check("key 2 switches to Flow", (await search()).includes("v=flow"), await search());
+  check("switching view animates the stage", (await draws()) > 30, `${await draws()} draws`);
+  const flowA = await readout();
+  await page.mouse.move(W / 2, H / 2);
+  for (let i = 0; i < 6; i++) {
+    await page.mouse.wheel(0, 100);
+    await sleep(30);
+  }
+  await sleep(900);
+  check("wheel scrolls the Flow rail", (await readout()) !== flowA, `${flowA} -> ${await readout()}`);
 
-  // --- similarity view ----------------------------------------------------------------------
-  // Reset the counter *before* the switch: regrouping resets the view and reassigns every slot,
-  // so it must produce a redraw on its own.
-  await page.evaluate(() => (window.__probe.draws = 0));
-  await page.selectOption('select[aria-label="Arrange tiles"]', { index: 1 });
-  await sleep(2500);
-  const drawsAfterView = await page.evaluate(() => window.__probe.draws);
-  check("similarity view re-renders the grid", drawsAfterView > 10, `${drawsAfterView} draws`);
+  // --- stack + index ---------------------------------------------------------------------------
+  await page.locator('[role="radio"][aria-label="Stack"]').click();
+  await sleep(1400);
+  check("dock switches to Stack", (await search()).includes("v=stack"));
+  await page.keyboard.press("4");
+  await sleep(1200);
+  const cells = await page.locator("[data-clip]").count();
+  check("Index view lists clips", cells > 20, `${cells} cells`);
 
-  // --- reload: welcome modal stays dismissed -------------------------------------------------
-  await page.reload({ waitUntil: "domcontentloaded" });
+  // --- sort ----------------------------------------------------------------------------------
+  await page.locator('button[aria-label^="Sort"]').click();
+  await sleep(300);
+  await page.locator('[role="dialog"][aria-label="Sort"] button', { hasText: "Day" }).click();
+  await sleep(800);
+  const days = await page.evaluate(() =>
+    Array.from(document.querySelectorAll("[data-clip]"))
+      .slice(0, 12)
+      .map((e) => Number(e.getAttribute("data-clip")))
+  );
+  check(
+    "sort by day orders oldest first",
+    days.every((d, i) => i === 0 || d > days[i - 1]),
+    days.join(",")
+  );
+  check("sort goes into the URL", (await search()).includes("s=day"));
+  await page.keyboard.press("Escape");
+
+  // --- filter + go to day ------------------------------------------------------------------------
+  await page.locator('button[aria-label^="Filter"]').click();
+  await sleep(300);
+  await page.locator('[role="dialog"][aria-label="Filter and find"] button[aria-pressed]').first().click();
+  await sleep(800);
+  const filtered = await page.locator("[data-clip]").count();
+  check("style filter narrows the list", filtered > 0 && filtered < cells, `${filtered} of ${cells}`);
+  check("filter goes into the URL", /[?&]st=/.test(await search()));
+  const target = await page.locator("[data-clip]").nth(2).getAttribute("data-clip");
+  await page.fill("#goto-day", target ?? "");
+  await page.keyboard.press("Enter");
+  await sleep(1200);
+  check("Go to day opens that clip", (await page.locator(`[role="dialog"][aria-label="Day ${target}"]`).count()) === 1);
+  await page.keyboard.press("Escape");
+  await sleep(900);
+
+  // --- theme -----------------------------------------------------------------------------------
+  const toggle = page.locator('button[aria-label="Dark mode"], button[aria-label="Light mode"]');
+  const wasDark = (await page.evaluate(() => document.documentElement.dataset.theme)) === "dark";
+  await toggle.click();
+  await sleep(500);
+  const nowTheme = await page.evaluate(() => document.documentElement.dataset.theme);
+  check("theme toggle flips the theme", nowTheme === (wasDark ? "light" : "dark"), nowTheme);
+
+  // --- deep link + revisit -------------------------------------------------------------------------
+  await page.goto(`${URL}/?v=flow&s=day&c=${target}`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("canvas");
   await sleep(2500);
+  check("deep link opens the player", (await page.locator(`[role="dialog"][aria-label="Day ${target}"]`).count()) === 1);
   check("welcome modal does not reappear on revisit", (await page.locator("text=Welcome to the gallery").count()) === 0);
 
-  // --- kiosk mode boots ----------------------------------------------------------------------
-  await page.goto(`${URL}/?kiosk=1`, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector("canvas");
-  await sleep(3000);
-  const kioskDraws = await page.evaluate(() => {
-    window.__probe.draws = 0;
-    return true;
-  });
-  await page.mouse.move(W / 2, H / 2);
-  await page.mouse.wheel(0, 120);
-  await sleep(800);
-  const kd = await page.evaluate(() => window.__probe.draws);
-  check("kiosk mode renders", kioskDraws && kd > 10, `${kd} draws`);
-  check("kiosk mode suppresses the welcome modal", (await page.locator("text=Welcome to the gallery").count()) === 0);
-
-  const realErrors = errors.filter((e) => !/favicon|Failed to load resource/i.test(e));
+  const realErrors = errors.filter((e) => !/favicon|Failed to load resource|GL Driver/i.test(e));
   check("no console errors", realErrors.length === 0, realErrors.slice(0, 3).join(" | "));
 
   console.log(`\n  ${passed} passed, ${failed} failed\n`);

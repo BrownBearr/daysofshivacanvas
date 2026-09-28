@@ -1,4 +1,4 @@
-import { POOL_SIZE } from "../theme";
+import { RUNTIME } from "../runtime";
 
 class VideoPool {
   private elements: HTMLVideoElement[];
@@ -7,7 +7,7 @@ class VideoPool {
   // tileIds oldest-first (front = LRU candidate)
   private lru: string[] = [];
 
-  constructor(size: number = POOL_SIZE) {
+  constructor(size: number = RUNTIME.poolSize) {
     this.elements = Array.from({ length: size }, () => {
       const el = document.createElement("video");
       // Grid previews stay muted for the life of the element. Browsers only allow unprompted

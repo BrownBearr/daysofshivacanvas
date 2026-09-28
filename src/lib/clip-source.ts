@@ -2,7 +2,6 @@ import type { ClipData } from "../types";
 
 // Public B2 bucket base, e.g. https://daysofshiva-source.s3.us-east-005.backblazeb2.com
 // Bucket is public + CORS-enabled, so plain HTTPS works — no signed URLs needed.
-// On the kiosk build this is "/clips", served from the local mirror by scripts/serve-kiosk.mjs.
 const CDN_BASE = (import.meta.env.VITE_CDN_BASE ?? "").replace(/\/$/, "");
 
 // Which poster tier the grid uses.
