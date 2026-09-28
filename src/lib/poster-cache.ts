@@ -31,23 +31,25 @@ loader.setCrossOrigin("anonymous");
 const supportsImageBitmap = typeof createImageBitmap === "function";
 
 function loadViaImageBitmap(url: string): Promise<THREE.Texture> {
-  return fetch(url, { mode: "cors", credentials: "omit" })
-    .then((r) => {
-      if (!r.ok) throw new Error(`${r.status}`);
-      return r.blob();
-    })
-    // WebGL ignores UNPACK_FLIP_Y for ImageBitmap sources, so Three's default flipY does nothing
-    // and posters render upside down. Flip at decode time instead, and turn flipY off.
-    .then((blob) => createImageBitmap(blob, { imageOrientation: "flipY" }))
-    .then((bitmap) => {
-      const tex = new THREE.Texture(bitmap as unknown as HTMLImageElement);
-      tex.flipY = false;
-      // Three needs telling that the source is a bitmap, or it treats it as a DOM image.
-      (tex as unknown as { isVideoTexture?: boolean }).isVideoTexture = false;
-      tex.needsUpdate = true;
-      applySquareCrop(tex, bitmap.width, bitmap.height);
-      return tex;
-    });
+  return (
+    fetch(url, { mode: "cors", credentials: "omit" })
+      .then((r) => {
+        if (!r.ok) throw new Error(`${r.status}`);
+        return r.blob();
+      })
+      // WebGL ignores UNPACK_FLIP_Y for ImageBitmap sources, so Three's default flipY does nothing
+      // and posters render upside down. Flip at decode time instead, and turn flipY off.
+      .then((blob) => createImageBitmap(blob, { imageOrientation: "flipY" }))
+      .then((bitmap) => {
+        const tex = new THREE.Texture(bitmap as unknown as HTMLImageElement);
+        tex.flipY = false;
+        // Three needs telling that the source is a bitmap, or it treats it as a DOM image.
+        (tex as unknown as { isVideoTexture?: boolean }).isVideoTexture = false;
+        tex.needsUpdate = true;
+        applySquareCrop(tex, bitmap.width, bitmap.height);
+        return tex;
+      })
+  );
 }
 
 // Insertion order is recency: re-inserted on every acquire, so the front is the LRU candidate.

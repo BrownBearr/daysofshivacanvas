@@ -35,6 +35,11 @@
     }
   },
   "files": {
-    "includes": ["**", "!node_modules", "!dist", "!bench", "!local-clips", "!scripts/.cache"]
+    "includes": ["**", "!node_modules", "!dist", "!bench", "!local-clips", "!scripts/.cache", "!src/data"]
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
   }
 }

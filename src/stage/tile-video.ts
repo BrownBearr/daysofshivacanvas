@@ -3,8 +3,8 @@ import { previewUrl } from "../lib/clip-source";
 import { applySquareCrop } from "../lib/poster-cache";
 import { videoPool } from "../lib/video-pool";
 import type { ClipData } from "../types";
-import { requestFrame } from "./camera-state";
-import type { TileSlot } from "./slot";
+import type { Slot } from "./engine";
+import { requestFrame } from "./frame";
 
 // Video playback for the grid, in one place.
 //
@@ -28,7 +28,7 @@ export const HOVER_PLAY_DELAY = 90;
 let armTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingKey: string | null = null;
 
-let activeSlot: TileSlot | null = null;
+let activeSlot: Slot | null = null;
 let activeKey: string | null = null;
 let activeEl: RVFCVideo | null = null;
 let rvfcHandle = 0;
@@ -52,7 +52,7 @@ function teardown(): void {
   activeEl = null;
 }
 
-function start(slot: TileSlot, cellKey: string, clip: ClipData): void {
+function start(slot: Slot, cellKey: string, clip: ClipData): void {
   const el = videoPool.acquire(cellKey, previewUrl(clip)) as RVFCVideo | null;
   if (!el) return;
 
@@ -94,7 +94,7 @@ function start(slot: TileSlot, cellKey: string, clip: ClipData): void {
  * Ask for `slot` to be the playing tile, after the hover-intent delay. Passing null stops playback.
  * Calling repeatedly with the same cell is a no-op, so this is safe to drive from a frame loop.
  */
-export function armVideo(slot: TileSlot | null, cellKey: string | null, clip: ClipData | null): void {
+export function armVideo(slot: Slot | null, cellKey: string | null, clip: ClipData | null): void {
   // These guards must not fire for the "stop everything" call (cellKey === null), or a cursor
   // leaving the grid would match the null pendingKey and return before tearing down — leaving the
   // preview decoding, and its requestVideoFrameCallback pinning the demand frameloop, forever.
@@ -118,7 +118,7 @@ export function armVideo(slot: TileSlot | null, cellKey: string | null, clip: Cl
     armTimer = null;
     pendingKey = null;
     // The slot may have been recycled to a different cell during the delay.
-    if (slot.cellKey !== cellKey) return;
+    if (slot.videoKey !== cellKey) return;
     teardown();
     start(slot, cellKey, clip);
   }, HOVER_PLAY_DELAY);
