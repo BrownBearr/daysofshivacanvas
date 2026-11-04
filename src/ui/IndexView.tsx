@@ -1,6 +1,6 @@
 import { motion, useReducedMotion } from "motion/react";
 import * as React from "react";
-import { posterUrl, previewUrl } from "../lib/clip-source";
+import { previewUrl, tilePosterFallback, tilePosterUrl } from "../lib/clip-source";
 import { formatDay } from "../lib/days";
 import { atlasCss } from "../stage/atlas";
 import { STYLE_CLUSTERS, styleOf } from "../state/sort";
@@ -75,7 +75,11 @@ const Cell = React.memo(function Cell({
           }
         >
           <img
-            src={posterUrl(clip)}
+            src={tilePosterUrl(clip)}
+            onError={(e) => {
+              const fb = tilePosterFallback(clip);
+              if (fb && e.currentTarget.src !== fb) e.currentTarget.src = fb;
+            }}
             // CORS mode like the stage's fetches, so the two never share a non-CORS cache entry.
             crossOrigin="anonymous"
             alt=""

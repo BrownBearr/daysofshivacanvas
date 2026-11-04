@@ -6,7 +6,7 @@
 // view or sort is just changing which function runs, and every tile tweens from where it was drawn
 // to where the new layout wants it.
 import * as THREE from "three";
-import { posterUrl } from "../lib/clip-source";
+import { tilePosterFallback, tilePosterUrl } from "../lib/clip-source";
 import { acquirePoster, releasePoster } from "../lib/poster-cache";
 import { prefersReducedMotion } from "../runtime";
 import type { ClipData, ViewId } from "../types";
@@ -29,6 +29,8 @@ import {
   RAIL_DEPTH,
   RAIL_FOLLOW,
   RAIL_SNAP_MS,
+  REVEAL_FROM_SCALE,
+  REVEAL_MS,
   SCROLL_TRANSFER,
   STACK_RANGE,
   TAN_HALF_FOV,
@@ -82,6 +84,10 @@ export interface Slot {
   delay: number;
   presence: number;
   hover: number;
+  /** When the tile first showed on screen (reveal start); NaN while waiting off screen. */
+  revealAt: number;
+  /** Reveal progress, 0..1. 1 means fully revealed (or no reveal). */
+  reveal: number;
   atlasReady: boolean;
   posterUrl: string | null;
   posterTex: THREE.Texture | null;
@@ -112,6 +118,12 @@ const smoothstep = (a: number, b: number, v: number) => {
   return t * t * (3 - 2 * t);
 };
 const easeOut = (t: number) => (t >= 1 ? 1 : 1 - 2 ** (-10 * t));
+// A soft overshoot (~3%) so a revealed tile settles into place rather than stopping dead.
+const easeOutBack = (t: number) => {
+  const c = 1.4;
+  const u = t - 1;
+  return 1 + (c + 1) * u * u * u + c * u * u;
+};
 const damp = (lambda: number, dt: number) => 1 - Math.exp(-lambda * dt);
 const KEY_BIAS = 32768;
 
@@ -446,10 +458,18 @@ function park(s: Slot) {
   s.morphing = false;
   s.presence = 0;
   s.hover = 0;
+  s.reveal = 1;
+  s.revealAt = Number.NaN;
   s.mesh.visible = false;
   s.refl.visible = false;
   releaseSlotPoster(s);
   s.clip = null;
+}
+
+function targetOnScreen(s: Slot): boolean {
+  const halfH = -s.tz * TAN_HALF_FOV;
+  const r = TILE * s.ts * 0.5;
+  return Math.abs(s.tx) < halfH * vp.aspect + r && Math.abs(s.ty) < halfH + r;
 }
 
 function assign(s: Slot, key: number, idx: number, clip: ClipData, now: number) {
@@ -457,6 +477,12 @@ function assign(s: Slot, key: number, idx: number, clip: ClipData, now: number) 
   s.index = idx;
   setClip(s, clip);
   s.videoKey = `${scene?.view}:${key}:${clip.name}`;
+  // A field tile picked up while panning or zooming waits to reveal until it crosses onto the
+  // screen. Scene changes have their own entrance (the morph) for tiles on screen; the margin rings
+  // they assign off screen wait like any other, so the first rows you pan into reveal too.
+  const reveals = scene?.view === "field" && !prefersReducedMotion() && (!firstFrame || !targetOnScreen(s));
+  s.reveal = reveals ? 0 : 1;
+  s.revealAt = Number.NaN;
 
   if (firstFrame) {
     const from = snapshot.get(clip.name);
@@ -802,14 +828,27 @@ export function tick(rawDt: number, now: number): boolean {
     const halfH = -s.z * TAN_HALF_FOV;
     const onScreen = Math.abs(s.x) < halfH * vp.aspect + TILE * s.s * 0.5 && Math.abs(s.y) < halfH + TILE * s.s * 0.5;
     const px = ((TILE * s.s) / (2 * halfH)) * vp.h * vp.dpr;
+
+    // reveal: starts the frame the tile first shows on screen (and has a picture to show)
+    if (s.reveal < 1) {
+      if (Number.isNaN(s.revealAt)) {
+        if (onScreen && s.presence > 0.01) s.revealAt = now;
+      }
+      // Only a running reveal keeps the demand loop awake; one waiting off screen must not, or idle
+      // never reaches zero draws. Whatever brings it on screen (a pan, a zoom) is already a frame.
+      if (!Number.isNaN(s.revealAt)) {
+        s.reveal = clamp((now - s.revealAt) / REVEAL_MS, 0, 1);
+        anim = true;
+      }
+    }
     const wantsPoster = !s.posterUrl && s.presence > 0.01 && px > POSTER_MIN_PX && onScreen;
     // Deferred only while flying or morphing. Keep the demand loop ticking until it isn't, or a
     // tile that settles without further input would stay on its 96px atlas cell forever.
     if (wantsPoster && (fast || morphing)) anim = true;
     if (!s.posterUrl && s.presence > 0.01 && (s === hoverSlot || (wantsPoster && !fast && !morphing))) {
-      const url = posterUrl(s.clip);
+      const url = tilePosterUrl(s.clip);
       s.posterUrl = url;
-      acquirePoster(url).then((tex) => {
+      acquirePoster(url, tilePosterFallback(s.clip)).then((tex) => {
         if (s.posterUrl !== url) {
           releasePoster(url);
           return;
@@ -825,7 +864,9 @@ export function tick(rawDt: number, now: number): boolean {
       u.uMap.value = s.videoTex;
       u.uMapRect.value.set(s.videoTex.offset.x, s.videoTex.offset.y, s.videoTex.repeat.x, s.videoTex.repeat.y);
       u.uMix.value = 1;
+      u.uMapVideo.value = 1;
     } else if (s.posterTex) {
+      u.uMapVideo.value = 0;
       if (u.uMap.value !== s.posterTex) {
         u.uMap.value = s.posterTex;
         u.uMapRect.value.set(s.posterTex.offset.x, s.posterTex.offset.y, s.posterTex.repeat.x, s.posterTex.repeat.y);
@@ -839,15 +880,19 @@ export function tick(rawDt: number, now: number): boolean {
       u.uMix.value = s.posterMix;
     } else {
       u.uMix.value = 0;
+      u.uMapVideo.value = 0;
     }
-    u.uOpacity.value = s.presence;
+    // Opacity leads the scale: the tile is solid by ~40% of the way, then settles.
+    const revealO = s.reveal >= 1 ? 1 : smoothstep(0, 0.4, s.reveal);
+    const revealS = s.reveal >= 1 ? 1 : REVEAL_FROM_SCALE + (1 - REVEAL_FROM_SCALE) * easeOutBack(s.reveal);
+    u.uOpacity.value = s.presence * revealO;
 
     // write the mesh
-    const visible = s.presence > 0.003;
+    const visible = s.presence * revealO > 0.003;
     s.mesh.visible = visible;
     s.refl.visible = visible && sc.view === "flow";
     if (!visible) continue;
-    const scale = s.s * (1 + hoverAmt * s.hover);
+    const scale = s.s * revealS * (1 + hoverAmt * s.hover);
     s.mesh.position.set(s.x, s.y, s.z + (isField ? 0.02 * s.hover : 0));
     s.mesh.rotation.set(s.rx, s.ry, 0);
     s.mesh.scale.setScalar(scale);
@@ -855,7 +900,7 @@ export function tick(rawDt: number, now: number): boolean {
 
     // A settled tile renders in the opaque pass with depth writes (early-Z, no sorting). Only
     // fading or hover-enlarged tiles, which overlap neighbours, need blending.
-    const opaque = s.presence >= 0.999 && (!isField || s.hover < 0.001);
+    const opaque = s.presence >= 0.999 && s.reveal >= 1 && (!isField || s.hover < 0.001);
     if (s.mat.transparent === opaque) {
       s.mat.transparent = !opaque;
       s.mat.depthWrite = opaque;

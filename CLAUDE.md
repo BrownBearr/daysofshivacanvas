@@ -67,7 +67,8 @@ src/
     Chrome.tsx          # top bar, readout, empty state, About, Welcome
     Popover.tsx, theme.ts
 scripts/
-  make-atlas.mjs        # posters -> public/atlas/*.webp + src/data/atlas.json
+  make-hd-posters.mjs   # 720px square stills from the sources -> B2 {name}-hd.webp
+  make-atlas.mjs        # stills -> public/atlas/*.webp + src/data/atlas.json
   smoke.mjs             # functional test (Playwright), must be 29/29
   smoke-mobile.mjs      # touch/phone test, must be 25/25
   bench.mjs             # frame-time benchmark (Playwright)
@@ -96,6 +97,10 @@ scripts/
   through each other.
 - **Canvas taps open on `click`, not `pointerup`.** Opening on pointerup put the player's scrim under
   the browser's own click, which closed it again (seen as a flash on mobile).
+- **Video textures need shader-side sRGB decode.** three stores them as linear RGBA8, so the tile
+  shader decodes when `uMapVideo` is 1. Without it previews render washed out and lighter than the poster.
+- **Field tiles reveal** (grow from 0.84 and fade in, `REVEAL_MS`) the first time they cross onto
+  the screen. A reveal waiting off screen must not keep the demand loop awake.
 - DOM `<img>`/`<video>` of B2 assets must set `crossOrigin="anonymous"`, or they poison the HTTP
   cache for the stage's CORS fetches.
 
@@ -142,11 +147,12 @@ Reference, 1920x1080 at `--cpu 4` on the dev machine (v1 from `main` in brackets
 |---|---|
 | B2 `{name}.mp4` | full quality, player only |
 | B2 `{name}-480.mp4` | muted hover / front-card preview |
-| B2 `{name}.jpg` | 712x400 poster, stage LOD + index + player |
-| `/atlas/atlas-{n}.webp` | every clip at 96px, 2 sheets, ~880KB |
+| B2 `{name}.jpg` | 712x400 poster: player, and grid tiles unless `VITE_POSTER_TIER=hd` |
+| B2 `{name}-hd.webp` | 720px square still cut from the source at 0.5s: grid tiles + index when `VITE_POSTER_TIER=hd` (falls back to `.jpg` per clip) |
+| `/atlas/atlas-{n}.webp` | every clip at 128px, 3 sheets, ~1.8MB, built from the HD stills |
 
-**After adding clips** (and running `tag-styles.py`), run `npm run clips:atlas` (set
-`VITE_CDN_BASE`). A clip missing from the atlas still works; it just paints grey until its poster lands.
+**After adding clips** (and running `tag-styles.py`), run `npm run clips:hd -- --upload` then
+`npm run clips:atlas` (set `VITE_CDN_BASE`). A clip missing from the atlas still works; it just paints grey until its poster lands.
 
 The B2 bucket still sends no `Cache-Control`. A Cloudflare hostname in front of it with
 `immutable` caching remains the biggest network win; it only needs `VITE_CDN_BASE`.

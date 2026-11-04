@@ -133,7 +133,7 @@ function makeFallback(): THREE.Texture {
  * Resolve a poster texture and register a reference to it. Every `acquire` must be paired with a
  * `release` for the same URL, or the texture is pinned in the cache forever.
  */
-export function acquirePoster(url: string): Promise<THREE.Texture> {
+export function acquirePoster(url: string, fallback: string | null = null): Promise<THREE.Texture> {
   const hit = cache.get(url);
   if (hit) {
     hit.refs++;
@@ -154,10 +154,10 @@ export function acquirePoster(url: string): Promise<THREE.Texture> {
     });
   }
 
-  const viaLoader = () =>
+  const viaLoader = (src: string) =>
     new Promise<THREE.Texture>((resolve) => {
       loader.load(
-        url,
+        src,
         (tex) => {
           const img = tex.image as HTMLImageElement;
           applySquareCrop(tex, img?.naturalWidth ?? 0, img?.naturalHeight ?? 0);
@@ -167,8 +167,11 @@ export function acquirePoster(url: string): Promise<THREE.Texture> {
         () => resolve(makeFallback())
       );
     });
+  const load = (src: string) => (supportsImageBitmap ? loadViaImageBitmap(src).catch(() => viaLoader(src)) : viaLoader(src));
+  // A missing higher tier (404) retries the fallback URL; the texture is still cached under `url`.
+  const first = supportsImageBitmap && fallback ? loadViaImageBitmap(url).catch(() => load(fallback)) : load(url);
 
-  const promise = (supportsImageBitmap ? loadViaImageBitmap(url).catch(viaLoader) : viaLoader())
+  const promise = first
     .then((tex) => {
       tex.colorSpace = THREE.SRGBColorSpace;
       // Mipmaps stay on: a 712px poster drawn at ~130px (max zoom) shimmers badly without them.
