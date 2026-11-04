@@ -16,13 +16,16 @@ import sharp from "sharp";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CACHE = join(ROOT, "scripts/.cache/posters");
+// Square stills cut from the full-quality sources (make-hd-posters.mjs). Preferred when present:
+// the old 712x400 JPEG posters are too soft and blocky to make a clean thumbnail from.
+const HD_CACHE = join(ROOT, "scripts/.cache/hd-posters");
 const OUT_DIR = join(ROOT, "public/atlas");
 const MAP_OUT = join(ROOT, "src/data/atlas.json");
 
-// 96px cells cover a tile up to ~96 device px; above that the stage swaps in the real poster.
-// 2016 = 21 x 96, just under 2048, the largest size every mobile GPU accepts.
-const CELL = Number(process.env.ATLAS_CELL ?? 96);
-const SHEET = 2016;
+// 128px cells cover a tile up to ~128 device px; above that the stage swaps in the real poster.
+// Sheets stay at or under 2048, the largest size every mobile GPU accepts (2048 = 16 x 128).
+const CELL = Number(process.env.ATLAS_CELL ?? 128);
+const SHEET = Math.floor(2048 / CELL) * CELL;
 const PER_ROW = Math.floor(SHEET / CELL);
 const PER_SHEET = PER_ROW * PER_ROW;
 const CONCURRENCY = 12;
@@ -41,6 +44,8 @@ function readEnvBase() {
 }
 
 async function fetchPoster(base, name) {
+  const hd = join(HD_CACHE, `${name}.webp`);
+  if (existsSync(hd)) return readFileSync(hd);
   const file = join(CACHE, `${name}.jpg`);
   if (existsSync(file)) return readFileSync(file);
   if (offline) return null;
@@ -74,7 +79,9 @@ async function main() {
         console.warn(`  skip ${names[i]}: ${e.message}`);
         return null;
       });
-      cells[i] = buf ? await sharp(buf).resize(CELL, CELL, { fit: "cover", position: "centre" }).toBuffer() : null;
+      cells[i] = buf
+        ? await sharp(buf).resize(CELL, CELL, { fit: "cover", position: "centre", kernel: "lanczos3" }).toBuffer()
+        : null;
       if (++done % 100 === 0) console.log(`  ${done}/${names.length}`);
     }
   }
@@ -97,7 +104,7 @@ async function main() {
     const rows = Math.ceil(slice.length / PER_ROW);
     const out = await sharp({ create: { width: SHEET, height: rows * CELL, channels: 3, background: "#808080" } })
       .composite(composites)
-      .webp({ quality: Number(process.env.ATLAS_Q ?? 62), effort: 6 })
+      .webp({ quality: Number(process.env.ATLAS_Q ?? 76), effort: 6, smartSubsample: true })
       .toBuffer();
     writeFileSync(join(OUT_DIR, `atlas-${s}.webp`), out);
     total += out.length;

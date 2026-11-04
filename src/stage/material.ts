@@ -18,18 +18,28 @@ uniform vec4 uAtlasRect;
 uniform sampler2D uMap;
 uniform vec4 uMapRect;
 uniform float uMix;
+uniform float uMapVideo;
 uniform float uOpacity;
 uniform float uReflect;
 uniform float uHover;
 uniform vec3 uBg;
 varying vec2 vUv;
+vec3 sampleMap() {
+  vec4 t = texture2D(uMap, uMapRect.xy + vUv * uMapRect.zw);
+  // three uploads video frames as linear RGBA8 (no sRGB8 storage), and its built-in materials
+  // decode them in the shader (DECODE_VIDEO_TEXTURE). A ShaderMaterial has to do it itself, or the
+  // sRGB frame is encoded twice by colorspace_fragment and the preview reads washed out and lighter
+  // than the poster under it.
+  if (uMapVideo > 0.5) t = sRGBTransferEOTF(t);
+  return t.rgb;
+}
 void main() {
   // Uniform branches: a settled tile samples one texture, not two. Fill rate is most of the cost
   // of a zoomed-out field on weak GPUs.
   vec3 c;
   if (uMix <= 0.001) c = texture2D(uAtlas, uAtlasRect.xy + vUv * uAtlasRect.zw).rgb;
-  else if (uMix >= 0.999) c = texture2D(uMap, uMapRect.xy + vUv * uMapRect.zw).rgb;
-  else c = mix(texture2D(uAtlas, uAtlasRect.xy + vUv * uAtlasRect.zw).rgb, texture2D(uMap, uMapRect.xy + vUv * uMapRect.zw).rgb, uMix);
+  else if (uMix >= 0.999) c = sampleMap();
+  else c = mix(texture2D(uAtlas, uAtlasRect.xy + vUv * uAtlasRect.zw).rgb, sampleMap(), uMix);
   if (uReflect > 0.5) {
     // Mirrored below the card: strongest where it touches the card, gone within ~60% of its height.
     // Faded into the page colour rather than made transparent, so reflections stay opaque and the
@@ -38,7 +48,8 @@ void main() {
     gl_FragColor = vec4(mix(uBg, c, f * f * 0.3 * uOpacity), 1.0);
   } else {
     // Rail hover is a light lift in brightness, not geometry: moving a packed card intersects its neighbours.
-    gl_FragColor = vec4(mix(c, vec3(1.0), uHover * 0.07), uOpacity);
+    // A multiply, not a mix toward white, so blacks stay black and dark work doesn't wash out.
+    gl_FragColor = vec4(min(c * (1.0 + uHover * 0.08), vec3(1.0)), uOpacity);
   }
   #include <colorspace_fragment>
 }`;
@@ -65,6 +76,8 @@ export interface TileUniforms {
   uMap: { value: THREE.Texture };
   uMapRect: { value: THREE.Vector4 };
   uMix: { value: number };
+  /** 1 when uMap is a VideoTexture, which needs decoding to linear in the shader. */
+  uMapVideo: { value: number };
   uOpacity: { value: number };
   uReflect: { value: number };
   uHover: { value: number };
@@ -78,6 +91,7 @@ export function makeTileMaterials(): { mat: THREE.ShaderMaterial; refl: THREE.Sh
     uMap: { value: BLANK },
     uMapRect: { value: new THREE.Vector4(0, 0, 1, 1) },
     uMix: { value: 0 },
+    uMapVideo: { value: 0 },
     uOpacity: { value: 0 },
     uReflect: { value: 0 },
     uHover: { value: 0 },

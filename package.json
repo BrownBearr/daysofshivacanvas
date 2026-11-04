@@ -17,6 +17,7 @@
     "smoke": "node scripts/smoke.mjs",
     "clips:grid-posters": "node scripts/make-grid-posters.mjs",
     "clips:atlas": "node scripts/make-atlas.mjs",
+    "clips:hd": "node scripts/make-hd-posters.mjs",
     "smoke:mobile": "node scripts/smoke-mobile.mjs"
   },
   "dependencies": {

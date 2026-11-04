@@ -52,7 +52,7 @@ Reduced motion applies immediately with no exit phase.
 
 ## LOD and textures
 
-- Atlas first: `atlas.ts` loads 2 WebP sheets; every tile samples its 96px cell from frame one.
+- Atlas first: `atlas.ts` loads 3 WebP sheets; every tile samples its 128px cell from frame one.
   `Stage` waits for sheet 0 (max 2.5s) before the first scene so the entrance has pictures.
 - Poster upgrade when the tile is on screen, taller than `POSTER_MIN_PX` device px, and neither
   flying (`fast`) nor morphing. Arrivals queue and at most `UPLOADS_PER_FRAME` (3) are handed to

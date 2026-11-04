@@ -36,6 +36,10 @@ export const EXIT_MS = 170; // tiles leaving the scene fade before the morph sta
 export const MORPH_MS = 900;
 export const MORPH_STAGGER_MS = 260; // max extra delay, by distance from screen centre
 
+// Field tiles that pan or zoom onto the screen grow and fade in instead of just being there.
+export const REVEAL_MS = 520;
+export const REVEAL_FROM_SCALE = 0.84;
+
 // ---- LOD ----
-// The atlas cell is 96px. Above ~1.25x that on screen, a tile swaps to its full poster.
-export const POSTER_MIN_PX = 120;
+// The atlas cell is 128px. Above ~1.1x that on screen, a tile swaps to its full poster.
+export const POSTER_MIN_PX = 140;
