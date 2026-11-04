@@ -30,7 +30,7 @@ loader.setCrossOrigin("anonymous");
 // does the decode on a worker thread and hands back something the GL driver can upload directly.
 const supportsImageBitmap = typeof createImageBitmap === "function";
 
-function loadViaImageBitmap(url: string): Promise<THREE.Texture> {
+function loadViaImageBitmap(url: string, height = 0): Promise<THREE.Texture> {
   return (
     fetch(url, { mode: "cors", credentials: "omit" })
       .then((r) => {
@@ -39,7 +39,15 @@ function loadViaImageBitmap(url: string): Promise<THREE.Texture> {
       })
       // WebGL ignores UNPACK_FLIP_Y for ImageBitmap sources, so Three's default flipY does nothing
       // and posters render upside down. Flip at decode time instead, and turn flipY off.
-      .then((blob) => createImageBitmap(blob, { imageOrientation: "flipY" }))
+      // Decoding straight to the size the tile needs (off the main thread) keeps the upload small.
+      // A 720px square plus mipmaps took ~35ms to upload on a throttled CPU; three of those in one
+      // frame was the stutter while panning. Only the height is given, so the aspect is kept.
+      .then((blob) =>
+        createImageBitmap(
+          blob,
+          height > 0 ? { imageOrientation: "flipY", resizeHeight: height, resizeQuality: "high" } : { imageOrientation: "flipY" }
+        )
+      )
       .then((bitmap) => {
         const tex = new THREE.Texture(bitmap as unknown as HTMLImageElement);
         tex.flipY = false;
@@ -129,11 +137,19 @@ function makeFallback(): THREE.Texture {
   return tex;
 }
 
+/** Cache key for a poster decoded at `height` px (0 = native size). */
+export function posterKey(url: string, height: number): string {
+  return height > 0 ? `${url}#${height}` : url;
+}
+
 /**
- * Resolve a poster texture and register a reference to it. Every `acquire` must be paired with a
+ * Resolve a poster texture and register a reference to it. `url` may be a posterKey(), which
+ * decodes the image at that height. Every `acquire` must be paired with a
  * `release` for the same URL, or the texture is pinned in the cache forever.
  */
 export function acquirePoster(url: string, fallback: string | null = null): Promise<THREE.Texture> {
+  const [src, h] = url.split("#");
+  const height = Number(h) || 0;
   const hit = cache.get(url);
   if (hit) {
     hit.refs++;
@@ -167,9 +183,10 @@ export function acquirePoster(url: string, fallback: string | null = null): Prom
         () => resolve(makeFallback())
       );
     });
-  const load = (src: string) => (supportsImageBitmap ? loadViaImageBitmap(src).catch(() => viaLoader(src)) : viaLoader(src));
+  const load = (from: string) =>
+    supportsImageBitmap ? loadViaImageBitmap(from, height).catch(() => viaLoader(from)) : viaLoader(from);
   // A missing higher tier (404) retries the fallback URL; the texture is still cached under `url`.
-  const first = supportsImageBitmap && fallback ? loadViaImageBitmap(url).catch(() => load(fallback)) : load(url);
+  const first = supportsImageBitmap && fallback ? loadViaImageBitmap(src, height).catch(() => load(fallback)) : load(src);
 
   const promise = first
     .then((tex) => {

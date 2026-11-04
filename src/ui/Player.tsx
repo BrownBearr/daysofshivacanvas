@@ -111,19 +111,17 @@ function Controls({
   index,
   total,
   onStep,
-  onClose,
 }: {
   clip: ClipData;
   index: number;
   total: number;
   onStep: (d: number) => void;
-  onClose: () => void;
 }) {
   const muted = useApp((s) => s.muted);
   const volume = useApp((s) => s.volume);
   const pct = Math.round((muted ? 0 : volume) * 100);
   const iconBtn =
-    "grid h-10 w-10 place-items-center rounded-full text-[var(--pc)] transition-colors hover:bg-white/10 active:scale-95 disabled:opacity-30";
+    "grid h-10 w-10 place-items-center rounded-full text-[var(--pc)] transition-[background-color,scale] duration-150 ease-out hover:bg-white/10 enabled:active:scale-[0.96] disabled:opacity-30";
 
   return (
     <div
@@ -173,9 +171,6 @@ function Controls({
         </span>
         <button type="button" className={iconBtn} onClick={() => onStep(1)} disabled={index >= total - 1} aria-label="Next clip">
           <CaretRight size={20} />
-        </button>
-        <button type="button" className={`${iconBtn} ml-1`} onClick={onClose} aria-label="Close">
-          <X size={20} />
         </button>
       </div>
     </div>
@@ -235,6 +230,33 @@ function PlayerInner({ name, exitRect }: { name: string; exitRect: React.RefObje
     dialog.current?.focus();
   }, []);
 
+  // Scrolling is how you move around everywhere else, so a deliberate scroll (or a vertical swipe
+  // on touch) closes the player and drops you back into the grid. Ignored for the first moments
+  // after opening, so the tail of a trackpad's inertial scroll can't close it straight away.
+  const wheel = React.useRef({ sum: 0, at: 0 });
+  const onWheel = (e: React.WheelEvent) => {
+    if (performance.now() - openedAt.current < 500) return;
+    if ((e.target as HTMLElement).closest("input")) return;
+    const w = wheel.current;
+    const now = performance.now();
+    if (now - w.at > 250) w.sum = 0;
+    w.at = now;
+    w.sum += Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : 0;
+    if (Math.abs(w.sum) > 90) close();
+  };
+  const swipe = React.useRef<{ x: number; y: number; id: number } | null>(null);
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (e.pointerType === "mouse" || (e.target as HTMLElement).closest("button, input")) return;
+    swipe.current = { x: e.clientX, y: e.clientY, id: e.pointerId };
+  };
+  const onPointerUp = (e: React.PointerEvent) => {
+    const s = swipe.current;
+    swipe.current = null;
+    if (!s || s.id !== e.pointerId) return;
+    const dy = e.clientY - s.y;
+    if (Math.abs(dy) > 70 && Math.abs(dy) > Math.abs(e.clientX - s.x) * 1.5) close();
+  };
+
   return (
     <motion.div
       ref={dialog}
@@ -242,7 +264,13 @@ function PlayerInner({ name, exitRect }: { name: string; exitRect: React.RefObje
       aria-modal="true"
       aria-label={`Day ${name}`}
       tabIndex={-1}
-      className="fixed inset-0 z-40 outline-none"
+      className="fixed inset-0 z-40 touch-none outline-none"
+      onWheel={onWheel}
+      onPointerDown={onPointerDown}
+      onPointerUp={onPointerUp}
+      onPointerCancel={() => {
+        swipe.current = null;
+      }}
     >
       <motion.div
         className="absolute inset-0 bg-scrim"
@@ -292,8 +320,22 @@ function PlayerInner({ name, exitRect }: { name: string; exitRect: React.RefObje
         animate={{ opacity: 1, y: 0, transition: { delay: 0.2, duration: 0.4, ease: [0.16, 1, 0.3, 1] } }}
         exit={{ opacity: 0, transition: { duration: 0.15 } }}
       >
-        <Controls clip={clip} index={index} total={ordered.length} onStep={step} onClose={close} />
+        <Controls clip={clip} index={index} total={ordered.length} onStep={step} />
       </motion.div>
+      {/* Always in the same corner, big enough to hit without aiming. Esc, a click outside the
+          frame, a scroll and a vertical swipe all close too. */}
+      <motion.button
+        type="button"
+        onClick={close}
+        aria-label="Close"
+        title="Close (Esc)"
+        className="absolute top-3 right-3 grid h-11 w-11 place-items-center rounded-full bg-white/10 text-[#ececea] transition-[background-color,scale] duration-150 ease-out hover:bg-white/20 active:scale-[0.96] sm:top-4 sm:right-4 sm:h-12 sm:w-12"
+        initial={{ opacity: 0, scale: 0.9 }}
+        animate={{ opacity: 1, scale: 1, transition: { delay: 0.12, duration: 0.25, ease: [0.16, 1, 0.3, 1] } }}
+        exit={{ opacity: 0, transition: { duration: 0.15, ease: "easeOut" } }}
+      >
+        <X size={22} weight="bold" />
+      </motion.button>
     </motion.div>
   );
 }

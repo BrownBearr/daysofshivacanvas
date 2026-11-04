@@ -7,7 +7,7 @@
 // to where the new layout wants it.
 import * as THREE from "three";
 import { tilePosterFallback, tilePosterUrl } from "../lib/clip-source";
-import { acquirePoster, releasePoster } from "../lib/poster-cache";
+import { acquirePoster, posterKey, releasePoster } from "../lib/poster-cache";
 import { prefersReducedMotion } from "../runtime";
 import type { ClipData, ViewId } from "../types";
 import { atlasFor, onAtlasSheet } from "./atlas";
@@ -90,6 +90,10 @@ export interface Slot {
   reveal: number;
   atlasReady: boolean;
   posterUrl: string | null;
+  /** Decode height of the poster in posterUrl (0 = native). */
+  posterSize: number;
+  /** A smaller poster still on screen while a sharper one for a zoom-in loads. */
+  prevPosterUrl: string | null;
   posterTex: THREE.Texture | null;
   posterMix: number;
   videoTex: THREE.VideoTexture | null;
@@ -118,12 +122,7 @@ const smoothstep = (a: number, b: number, v: number) => {
   return t * t * (3 - 2 * t);
 };
 const easeOut = (t: number) => (t >= 1 ? 1 : 1 - 2 ** (-10 * t));
-// A soft overshoot (~3%) so a revealed tile settles into place rather than stopping dead.
-const easeOutBack = (t: number) => {
-  const c = 1.4;
-  const u = t - 1;
-  return 1 + (c + 1) * u * u * u + c * u * u;
-};
+const easeOutCubic = (t: number) => 1 - (1 - t) ** 3;
 const damp = (lambda: number, dt: number) => 1 - Math.exp(-lambda * dt);
 const KEY_BIAS = 32768;
 
@@ -131,7 +130,7 @@ const KEY_BIAS = 32768;
 
 export const slots: Slot[] = [];
 if (import.meta.env.DEV || new URLSearchParams(location.search).has("debug"))
-  (window as unknown as { __slots: Slot[] }).__slots = slots;
+  Object.assign(window as unknown as Record<string, unknown>, { __slots: slots, __cam: () => ({ ...cam, target: rail.target }) });
 
 const vp = { w: 1, h: 1, dpr: 1, aspect: 1 };
 let poolCols = 1;
@@ -151,7 +150,7 @@ const snapshot = new Map<string, { x: number; y: number; z: number; rx: number; 
 
 const cam: Cam = { x: 0, y: 0, z: FIELD_Z_START, rail: 0 };
 const field = { vx: 0, vy: 0, vz: 0, tvx: 0, tvy: 0, tvz: 0, zoomAccum: 0 };
-const rail = { target: 0, lastInput: 0, dragging: false };
+const rail = { target: 0, lastInput: 0, dragging: false, vel: 0 };
 export const pointer = { x: 0, y: 0, inside: false, mouse: true, dragging: false };
 
 let locked = false;
@@ -162,7 +161,18 @@ let atlasDirty = false;
 // Decoded posters wait here and are handed to tiles a few per frame, so a burst of arrivals (a
 // zoom-out, the end of a morph) never lands as one frame of texture uploads.
 const arrived: { s: Slot; url: string; tex: THREE.Texture }[] = [];
-const UPLOADS_PER_FRAME = 3;
+// Texture uploads handed out per frame: one while the view is moving, two once it settles.
+const UPLOADS_MOVING = 1;
+const UPLOADS_SETTLED = 2;
+// Posters decode at the smallest of these heights that covers the tile on screen; native beyond.
+const POSTER_STEPS = [256, 512];
+
+/** Decode height for a tile `px` device pixels tall (0 = native resolution). */
+function posterStep(px: number): number {
+  for (const h of POSTER_STEPS) if (px <= h * 1.1) return h;
+  return 0;
+}
+const stepRank = (h: number) => (h === 0 ? Number.POSITIVE_INFINITY : h);
 const listeners = new Set<(name: string | null) => void>();
 
 onAtlasSheet(() => {
@@ -425,6 +435,7 @@ function applyPending(now: number) {
   cam.y = pending.cam.y;
   cam.rail = pending.cam.rail;
   rail.target = cam.rail;
+  rail.vel = 0;
   field.vx = field.vy = field.vz = field.tvx = field.tvy = field.tvz = 0;
   pending = null;
   gen++;
@@ -437,6 +448,9 @@ function applyPending(now: number) {
 
 function releaseSlotPoster(s: Slot) {
   if (s.posterUrl) releasePoster(s.posterUrl);
+  if (s.prevPosterUrl) releasePoster(s.prevPosterUrl);
+  s.prevPosterUrl = null;
+  s.posterSize = 0;
   s.posterUrl = null;
   s.posterTex = null;
   s.posterMix = 0;
@@ -551,9 +565,11 @@ export function fieldZoom(delta: number) {
 export function railBy(d: number, snapNow = false) {
   if (!scene || scene.view === "field") return;
   const n = scene.clips.length;
-  rail.target = clamp(rail.target + d, -0.45, n - 1 + 0.45);
+  // A discrete step lands on whole cards from wherever the target is, so fast notches stack up
+  // (3 notches = 3 cards) instead of rounding against a target that is still in flight.
+  if (snapNow) rail.target = clamp(Math.round(rail.target) + d, 0, n - 1);
+  else rail.target = clamp(rail.target + d, -0.45, n - 1 + 0.45);
   rail.lastInput = snapNow ? 0 : performance.now();
-  if (snapNow) rail.target = clamp(Math.round(rail.target), 0, n - 1);
   requestFrame();
   // Under the demand loop, something has to wake the frame that performs the snap.
   if (!snapNow) setTimeout(requestFrame, RAIL_SNAP_MS + 16);
@@ -699,12 +715,20 @@ function stepRail(dt: number, now: number): boolean {
   if (!scene) return false;
   const n = scene.clips.length;
   if (!rail.dragging && now - rail.lastInput >= RAIL_SNAP_MS) rail.target = clamp(Math.round(rail.target), 0, Math.max(0, n - 1));
-  const diff = rail.target - cam.rail;
-  if (Math.abs(diff) < 0.0005) {
+  const x = cam.rail - rail.target;
+  if (Math.abs(x) < 0.0005 && Math.abs(rail.vel) < 0.01) {
     cam.rail = rail.target;
+    rail.vel = 0;
     return false;
   }
-  cam.rail += diff * damp(rail.dragging ? 22 : RAIL_FOLLOW, dt);
+  // Critically damped spring, solved exactly (stable at any dt). A first-order follow made the
+  // rail's speed jump on every wheel notch, so a long scroll read as lurch, brake, lurch. The
+  // spring carries velocity across new input, so successive notches blend into one glide.
+  const w = rail.dragging ? RAIL_FOLLOW * 3.2 : RAIL_FOLLOW * 1.45;
+  const e = Math.exp(-w * dt);
+  const k = (rail.vel + w * x) * dt;
+  cam.rail = rail.target + (x + k) * e;
+  rail.vel = (rail.vel - w * k) * e;
   return true;
 }
 
@@ -764,15 +788,22 @@ export function tick(rawDt: number, now: number): boolean {
   setCurrent(hovered?.clip?.name ?? railFront);
 
   // ---- 3. per-slot animation, LOD, material state ----
-  for (let n = 0; n < UPLOADS_PER_FRAME && arrived.length; n++) {
-    const a = arrived.shift();
-    if (a && a.s.posterUrl === a.url) a.s.posterTex = a.tex;
-  }
-  if (arrived.length) anim = true;
   const kPresence = damp(pending ? (1000 / EXIT_MS) * 2.2 : 8, dt);
   const kHover = damp(14, dt);
   const kMix = damp(9, dt);
   const fast = sc.view === "field" ? Math.hypot(field.vx, field.vy) > 14 : Math.abs(rail.target - cam.rail) > 0.8;
+  const moving =
+    sc.view === "field" ? Math.hypot(field.vx, field.vy, field.vz) > 0.3 || pointer.dragging : Math.abs(rail.target - cam.rail) > 0.02;
+  const uploads = moving ? UPLOADS_MOVING : UPLOADS_SETTLED;
+  for (let n = 0; n < uploads && arrived.length; n++) {
+    const a = arrived.shift();
+    if (a && a.s.posterUrl === a.url) {
+      a.s.posterTex = a.tex;
+      if (a.s.prevPosterUrl) releasePoster(a.s.prevPosterUrl);
+      a.s.prevPosterUrl = null;
+    }
+  }
+  if (arrived.length) anim = true;
   // Only the field grows a hovered tile; rail cards overlap, so they brighten instead (shader).
   const isField = sc.view === "field";
   const hoverAmt = isField ? FIELD_HOVER_SCALE - 1 : 0;
@@ -832,7 +863,14 @@ export function tick(rawDt: number, now: number): boolean {
     // reveal: starts the frame the tile first shows on screen (and has a picture to show)
     if (s.reveal < 1) {
       if (Number.isNaN(s.revealAt)) {
-        if (onScreen && s.presence > 0.01) s.revealAt = now;
+        if (onScreen && s.presence > 0.01) {
+          s.revealAt = now;
+          // Resolve from the side it came in on: the direction from screen centre, in screen units.
+          const dx = s.x / (halfH * vp.aspect);
+          const dy = s.y / halfH;
+          const len = Math.hypot(dx, dy) || 1;
+          s.u.uRevealDir.value.set(dx / len, dy / len);
+        }
       }
       // Only a running reveal keeps the demand loop awake; one waiting off screen must not, or idle
       // never reaches zero draws. Whatever brings it on screen (a pan, a zoom) is already a frame.
@@ -845,9 +883,16 @@ export function tick(rawDt: number, now: number): boolean {
     // Deferred only while flying or morphing. Keep the demand loop ticking until it isn't, or a
     // tile that settles without further input would stay on its 96px atlas cell forever.
     if (wantsPoster && (fast || morphing)) anim = true;
-    if (!s.posterUrl && s.presence > 0.01 && (s === hoverSlot || (wantsPoster && !fast && !morphing))) {
-      const url = tilePosterUrl(s.clip);
+    const size = posterStep(px);
+    // Zoomed in past what the decoded poster covers: fetch a sharper one, keep the current one
+    // showing until it lands.
+    const wantsUpgrade =
+      !!s.posterTex && !s.prevPosterUrl && stepRank(size) > stepRank(s.posterSize) && onScreen && !fast && !morphing;
+    if (wantsUpgrade || (!s.posterUrl && s.presence > 0.01 && (s === hoverSlot || (wantsPoster && !fast && !morphing)))) {
+      const url = posterKey(tilePosterUrl(s.clip), size);
+      if (wantsUpgrade) s.prevPosterUrl = s.posterUrl;
       s.posterUrl = url;
+      s.posterSize = size;
       acquirePoster(url, tilePosterFallback(s.clip)).then((tex) => {
         if (s.posterUrl !== url) {
           releasePoster(url);
@@ -882,9 +927,10 @@ export function tick(rawDt: number, now: number): boolean {
       u.uMix.value = 0;
       u.uMapVideo.value = 0;
     }
-    // Opacity leads the scale: the tile is solid by ~40% of the way, then settles.
-    const revealO = s.reveal >= 1 ? 1 : smoothstep(0, 0.4, s.reveal);
-    const revealS = s.reveal >= 1 ? 1 : REVEAL_FROM_SCALE + (1 - REVEAL_FROM_SCALE) * easeOutBack(s.reveal);
+    // The shader builds the tile up block by block; geometry only eases in slightly behind it.
+    const revealO = Number.isNaN(s.revealAt) && s.reveal < 1 ? 0 : 1;
+    const revealS = s.reveal >= 1 ? 1 : REVEAL_FROM_SCALE + (1 - REVEAL_FROM_SCALE) * easeOutCubic(s.reveal);
+    u.uReveal.value = s.reveal;
     u.uOpacity.value = s.presence * revealO;
 
     // write the mesh
@@ -900,7 +946,8 @@ export function tick(rawDt: number, now: number): boolean {
 
     // A settled tile renders in the opaque pass with depth writes (early-Z, no sorting). Only
     // fading or hover-enlarged tiles, which overlap neighbours, need blending.
-    const opaque = s.presence >= 0.999 && s.reveal >= 1 && (!isField || s.hover < 0.001);
+    // A resolving tile discards its hidden blocks, so it can stay opaque.
+    const opaque = s.presence >= 0.999 && (!isField || s.hover < 0.001);
     if (s.mat.transparent === opaque) {
       s.mat.transparent = !opaque;
       s.mat.depthWrite = opaque;

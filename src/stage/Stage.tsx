@@ -96,6 +96,8 @@ const Tiles = React.memo(function Tiles() {
         reveal: 1,
         atlasReady: false,
         posterUrl: null,
+        posterSize: 0,
+        prevPosterUrl: null,
         posterTex: null,
         posterMix: 0,
         videoTex: null,

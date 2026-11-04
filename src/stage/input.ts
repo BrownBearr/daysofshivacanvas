@@ -184,7 +184,12 @@ export function installInput(canvas: HTMLCanvasElement): () => void {
       else if (dx !== 0 || (Math.abs(dy) < 40 && !Number.isInteger(dy))) fieldPan(dx, dy);
       else fieldZoom(dy);
     } else {
-      railBy((Math.abs(dx) > Math.abs(dy) ? dx : dy) * 0.006);
+      const d = Math.abs(dx) > Math.abs(dy) ? dx : dy;
+      // A mouse wheel sends whole notches (~100px, integer, often 120). One notch is one card, so a
+      // long scroll moves a predictable number of cards and never snaps back mid-scroll. A trackpad
+      // sends small fractional deltas and scrubs continuously, snapping once it goes quiet.
+      if (Math.abs(d) >= 50 && Number.isInteger(d) && e.deltaMode !== 2) railBy(Math.sign(d) * Math.max(1, Math.round(Math.abs(d) / 110)), true);
+      else railBy(d * 0.006);
     }
   };
 
