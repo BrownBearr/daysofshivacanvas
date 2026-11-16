@@ -161,8 +161,8 @@ Reference, 1920x1080 at `--cpu 4` on the dev machine (v1 from `main` in brackets
 |---|---|
 | B2 `{name}.mp4` | full quality, player only |
 | B2 `{name}-480.mp4` | muted hover / front-card preview |
-| B2 `{name}.jpg` | 712x400 poster: player, and grid tiles unless `VITE_POSTER_TIER=hd` |
-| B2 `{name}-hd.webp` | 720px square still cut from the source at 0.5s: grid tiles + index when `VITE_POSTER_TIER=hd` (falls back to `.jpg` per clip) |
+| B2 `{name}.jpg` | 712x400 poster: player, and the per-clip fallback for grid tiles |
+| B2 `{name}-hd.webp` | 720px square still cut from the source at 0.5s: grid tiles + index (default tier; falls back to `.jpg` per clip; `VITE_POSTER_TIER=full` opts out) |
 | `/atlas/atlas-lq.webp` | every clip at 32px in one ~120KB sheet, preloaded; tiles paint from it first |
 | `/atlas/atlas-{n}.webp` | every clip at 128px, 3 sheets, ~1.8MB, built from the HD stills; replace the low-res cells as they land |
 

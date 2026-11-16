@@ -6,10 +6,10 @@ const CDN_BASE = (import.meta.env.VITE_CDN_BASE ?? "").replace(/\/$/, "");
 
 // Which still the square grid tiles use (stage LOD and the index view).
 //
-//   "full" (default) - {name}.jpg, the 712x400 landscape poster, cropped to a 400px square. Soft
-//                      once a tile is bigger than ~400 device px.
-//   "hd"             - {name}-hd.webp, a 720px square cut from the full-quality source
+//   "hd" (default)   - {name}-hd.webp, a 720px square cut from the full-quality source
 //                      (scripts/make-hd-posters.mjs --upload). Sharp up to near full zoom.
+//   "full"           - {name}.jpg, the 712x400 landscape poster, cropped to a 400px square. Soft
+//                      once a tile is bigger than ~400 device px.
 //   "sq"             - {name}-sq.webp, a 384px square re-encode of the old poster.
 //
 // Kept as a switch so the app never depends on a tier that may not be in the bucket yet. A clip
@@ -17,7 +17,7 @@ const CDN_BASE = (import.meta.env.VITE_CDN_BASE ?? "").replace(/\/$/, "");
 // Where the hd/sq tile tiers live. Defaults to the bucket; overridable (e.g. a local folder while
 // testing a tier before uploading it).
 const TILE_BASE = (import.meta.env.VITE_TILE_POSTER_BASE ?? CDN_BASE).replace(/\/$/, "");
-const POSTER_TIER = (["hd", "sq"] as const).find((t) => t === import.meta.env.VITE_POSTER_TIER) ?? "full";
+const POSTER_TIER = (["full", "sq"] as const).find((t) => t === import.meta.env.VITE_POSTER_TIER) ?? "hd";
 
 // Full-quality H.264 source, fetched only on focus, range-streamed.
 export function sourceUrl(clip: ClipData): string {
