@@ -99,10 +99,14 @@ scripts/
   the browser's own click, which closed it again (seen as a flash on mobile).
 - **Video textures need shader-side sRGB decode.** three stores them as linear RGBA8, so the tile
   shader decodes when `uMapVideo` is 1. Without it previews render washed out and lighter than the poster.
-- **Field tiles resolve in** the first time they cross onto the screen: the shader (`uReveal`,
-  `uRevealDir`) builds them from coarse blocks starting at the edge they entered by, sharpening
-  8 -> 64 blocks across, discarding hidden blocks so tiles stay opaque. A reveal waiting off screen
-  must not keep the demand loop awake.
+- **Field tiles wipe in** the first time they cross onto the screen: the shader (`uReveal`,
+  `uRevealDir`) uncovers them with a soft edge from the side they entered by, feathered into `uBg`
+  and discarding covered pixels so tiles stay opaque; the image settles from 1.08x. A reveal waiting
+  off screen must not keep the demand loop awake.
+- **Wheel input is classified per gesture** (`input.ts`): mouse, trackpad or pinch is decided by
+  the first events of a burst and held until it goes quiet (180ms), so a trackpad pan's momentum
+  tail can never flip into zoom. Field: mouse wheel zooms, trackpad pans, pinch (ctrl+wheel, Safari
+  gesture events) zooms. `overscroll-behavior: none` stops swipe-back navigation.
 - **Rails move on a critically damped spring** (`stepRail`), not a first-order follow, so speed is
   continuous across wheel notches. A mouse-wheel notch steps exactly one card; a trackpad scrubs.
 - **Posters decode at the size the tile needs** (256 / 512 / native, `posterStep`) and upgrade in
@@ -158,7 +162,8 @@ Reference, 1920x1080 at `--cpu 4` on the dev machine (v1 from `main` in brackets
 | B2 `{name}-480.mp4` | muted hover / front-card preview |
 | B2 `{name}.jpg` | 712x400 poster: player, and grid tiles unless `VITE_POSTER_TIER=hd` |
 | B2 `{name}-hd.webp` | 720px square still cut from the source at 0.5s: grid tiles + index when `VITE_POSTER_TIER=hd` (falls back to `.jpg` per clip) |
-| `/atlas/atlas-{n}.webp` | every clip at 128px, 3 sheets, ~1.8MB, built from the HD stills |
+| `/atlas/atlas-lq.webp` | every clip at 32px in one ~120KB sheet, preloaded; tiles paint from it first |
+| `/atlas/atlas-{n}.webp` | every clip at 128px, 3 sheets, ~1.8MB, built from the HD stills; replace the low-res cells as they land |
 
 **After adding clips** (and running `tag-styles.py`), run `npm run clips:hd -- --upload` then
 `npm run clips:atlas` (set `VITE_CDN_BASE`). A clip missing from the atlas still works; it just paints grey until its poster lands.

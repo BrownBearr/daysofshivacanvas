@@ -29,7 +29,6 @@ import {
   RAIL_DEPTH,
   RAIL_FOLLOW,
   RAIL_SNAP_MS,
-  REVEAL_FROM_SCALE,
   REVEAL_MS,
   SCROLL_TRANSFER,
   STACK_RANGE,
@@ -122,7 +121,6 @@ const smoothstep = (a: number, b: number, v: number) => {
   return t * t * (3 - 2 * t);
 };
 const easeOut = (t: number) => (t >= 1 ? 1 : 1 - 2 ** (-10 * t));
-const easeOutCubic = (t: number) => 1 - (1 - t) ** 3;
 const damp = (lambda: number, dt: number) => 1 - Math.exp(-lambda * dt);
 const KEY_BIAS = 32768;
 
@@ -865,11 +863,11 @@ export function tick(rawDt: number, now: number): boolean {
       if (Number.isNaN(s.revealAt)) {
         if (onScreen && s.presence > 0.01) {
           s.revealAt = now;
-          // Resolve from the side it came in on: the direction from screen centre, in screen units.
+          // Wipe in from the screen edge it crossed: the dominant axis of its offset from centre.
           const dx = s.x / (halfH * vp.aspect);
           const dy = s.y / halfH;
-          const len = Math.hypot(dx, dy) || 1;
-          s.u.uRevealDir.value.set(dx / len, dy / len);
+          if (Math.abs(dx) >= Math.abs(dy)) s.u.uRevealDir.value.set(Math.sign(dx) || 1, 0);
+          else s.u.uRevealDir.value.set(0, Math.sign(dy) || 1);
         }
       }
       // Only a running reveal keeps the demand loop awake; one waiting off screen must not, or idle
@@ -927,9 +925,8 @@ export function tick(rawDt: number, now: number): boolean {
       u.uMix.value = 0;
       u.uMapVideo.value = 0;
     }
-    // The shader builds the tile up block by block; geometry only eases in slightly behind it.
+    // A tile waiting to reveal stays hidden; once started, the shader wipes it in.
     const revealO = Number.isNaN(s.revealAt) && s.reveal < 1 ? 0 : 1;
-    const revealS = s.reveal >= 1 ? 1 : REVEAL_FROM_SCALE + (1 - REVEAL_FROM_SCALE) * easeOutCubic(s.reveal);
     u.uReveal.value = s.reveal;
     u.uOpacity.value = s.presence * revealO;
 
@@ -938,7 +935,7 @@ export function tick(rawDt: number, now: number): boolean {
     s.mesh.visible = visible;
     s.refl.visible = visible && sc.view === "flow";
     if (!visible) continue;
-    const scale = s.s * revealS * (1 + hoverAmt * s.hover);
+    const scale = s.s * (1 + hoverAmt * s.hover);
     s.mesh.position.set(s.x, s.y, s.z + (isField ? 0.02 * s.hover : 0));
     s.mesh.rotation.set(s.rx, s.ry, 0);
     s.mesh.scale.setScalar(scale);
@@ -946,7 +943,7 @@ export function tick(rawDt: number, now: number): boolean {
 
     // A settled tile renders in the opaque pass with depth writes (early-Z, no sorting). Only
     // fading or hover-enlarged tiles, which overlap neighbours, need blending.
-    // A resolving tile discards its hidden blocks, so it can stay opaque.
+    // A revealing tile discards its covered pixels, so it can stay opaque.
     const opaque = s.presence >= 0.999 && (!isField || s.hover < 0.001);
     if (s.mat.transparent === opaque) {
       s.mat.transparent = !opaque;

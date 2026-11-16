@@ -2,21 +2,25 @@ import * as THREE from "three";
 import atlasData from "../data/atlas.json";
 import { BLANK } from "./material";
 
-// The thumbnail atlas (scripts/make-atlas.mjs): a few WebP sheets holding every clip at 96px.
-// Loaded before anything else so every tile can paint on its first frame.
+// The thumbnail atlas (scripts/make-atlas.mjs): a few WebP sheets holding every clip at 128px, and
+// one small low-res sheet holding every clip at 32px. The low-res sheet is tiny, so it lands first
+// and every tile paints from it at once; each tile switches to its sharp cell when that sheet lands.
 
-type Item = [sheet: number, col: number, row: number];
+type Item = [sheet: number, col: number, row: number, lq: number];
 const items = atlasData.items as unknown as Record<string, Item>;
 const sheets: (THREE.Texture | null)[] = Array.from({ length: atlasData.sheets }, () => null);
+let lqSheet: THREE.Texture | null = null;
 const listeners = new Set<() => void>();
+
+export const ATLAS_LQ_URL = "/atlas/atlas-lq.webp";
 
 export function atlasUrl(sheet: number): string {
   return `/atlas/atlas-${sheet}.webp`;
 }
 
-function load(sheet: number): Promise<void> {
+function load(url: string, done: (t: THREE.Texture) => void): Promise<void> {
   return (
-    fetch(atlasUrl(sheet))
+    fetch(url)
       .then((r) => r.blob())
       // WebGL ignores UNPACK_FLIP_Y for ImageBitmap, so flip at decode time instead.
       .then((b) => createImageBitmap(b, { imageOrientation: "flipY" }))
@@ -30,7 +34,7 @@ function load(sheet: number): Promise<void> {
         t.minFilter = THREE.LinearFilter;
         t.magFilter = THREE.LinearFilter;
         t.needsUpdate = true;
-        sheets[sheet] = t;
+        done(t);
         for (const fn of listeners) fn();
       })
       .catch(() => {
@@ -41,11 +45,18 @@ function load(sheet: number): Promise<void> {
 
 let started: Promise<void> | null = null;
 
-/** Starts loading every sheet; resolves once the first one is ready. */
+/** Starts loading every sheet; resolves once the low-res sheet is ready (enough to paint every tile). */
 export function loadAtlas(): Promise<void> {
   if (!started) {
-    const all = sheets.map((_, i) => load(i));
-    started = all[0] ?? Promise.resolve();
+    started = load(ATLAS_LQ_URL, (t) => {
+      lqSheet = t;
+    });
+    // The sharp sheets start alongside it but after it in the queue; the low-res one is preloaded.
+    sheets.forEach((_, i) => {
+      load(atlasUrl(i), (t) => {
+        sheets[i] = t;
+      });
+    });
   }
   return started;
 }
@@ -59,9 +70,17 @@ export function onAtlasSheet(fn: () => void): () => void {
 export function atlasFor(name: string, rect: THREE.Vector4): { tex: THREE.Texture; ready: boolean } {
   const it = items[name];
   if (!it) return { tex: BLANK, ready: false };
-  const [s, col, row] = it;
+  const [s, col, row, lq] = it;
   const tex = sheets[s];
-  if (!tex) return { tex: BLANK, ready: false };
+  if (!tex) {
+    if (!lqSheet) return { tex: BLANK, ready: false };
+    const L = atlasData.lq;
+    const lc = lq % L.perRow;
+    const lr = Math.floor(lq / L.perRow);
+    const i = 0.5;
+    rect.set((lc * L.cell + i) / L.width, 1 - ((lr + 1) * L.cell - i) / L.height, (L.cell - 2 * i) / L.width, (L.cell - 2 * i) / L.height);
+    return { tex: lqSheet, ready: true };
+  }
   const w = atlasData.width;
   const h = atlasData.heights[s];
   const c = atlasData.cell;

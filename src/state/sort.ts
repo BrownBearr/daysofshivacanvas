@@ -26,9 +26,11 @@ export function styleOf(name: string): number {
   return clusterOf.get(name) ?? -1;
 }
 
+/** The clip's style name, or "" when it has none (an untagged clip shows just its date). */
 export function styleLabel(name: string): string {
   const id = styleOf(name);
-  return STYLE_CLUSTERS.find((c) => c.id === id)?.label ?? "unsorted";
+  if (id === -1) return "";
+  return STYLE_CLUSTERS.find((c) => c.id === id)?.label ?? "";
 }
 
 // Deterministic shuffle so a given seed always gives the same order (stable across re-renders and

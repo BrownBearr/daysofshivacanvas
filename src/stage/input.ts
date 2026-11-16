@@ -18,6 +18,29 @@ import { requestFrame } from "./frame";
 
 const CLICK_PX = 5;
 const TOUCH_CLICK_PX = 12;
+// Wheel events closer together than this belong to one gesture (a trackpad's momentum tail included).
+const WHEEL_GESTURE_GAP_MS = 180;
+
+type WheelEventWithLegacy = WheelEvent & { wheelDeltaX?: number; wheelDeltaY?: number };
+
+/**
+ * Does this wheel event look like a trackpad? Mouse wheels report whole notches: no horizontal
+ * delta, and a legacy wheelDelta that is a multiple of 120. Trackpads report fine-grained deltas
+ * (often fractional, often with an x component), and in Chromium and Safari their legacy
+ * wheelDelta is a small multiple of deltaY instead of a notch.
+ */
+function looksLikeTrackpad(e: WheelEventWithLegacy): boolean {
+  if (e.deltaMode !== 0) return false; // line / page units only come from wheels
+  if (e.deltaX !== 0) return true;
+  if (!Number.isInteger(e.deltaY)) return true;
+  const legacy = e.wheelDeltaY;
+  if (typeof legacy === "number" && legacy !== 0) {
+    // macOS trackpads report legacy = -3 x deltaY, which can land on a multiple of 120 (deltaY 40).
+    if (legacy === -3 * e.deltaY) return true;
+    return legacy % 120 !== 0;
+  }
+  return Math.abs(e.deltaY) < 40;
+}
 
 export function installInput(canvas: HTMLCanvasElement): () => void {
   const active = new Map<number, { x: number; y: number }>();
@@ -30,6 +53,10 @@ export function installInput(canvas: HTMLCanvasElement): () => void {
   let lastMoveT = 0;
   let railVel = 0;
   let pendingTap: { x: number; y: number; touch: boolean } | null = null;
+  // The wheel gesture in progress. Its kind is decided by its first events and then held until the
+  // gesture ends, so a trackpad pan can never flip into a zoom halfway (its momentum tail produces
+  // large integer deltas that look like a mouse notch on their own).
+  const wheel = { at: 0, kind: "mouse" as "mouse" | "trackpad" | "pinch" };
 
   const openAt = (x: number, y: number, touch: boolean) => {
     const s = pick(x, y, touch);
@@ -173,24 +200,43 @@ export function installInput(canvas: HTMLCanvasElement): () => void {
   const onWheel = (e: WheelEvent) => {
     e.preventDefault();
     if (isLocked()) return;
+    const now = performance.now();
+    const fresh = now - wheel.at > WHEEL_GESTURE_GAP_MS;
+    wheel.at = now;
+    // A trackpad pinch arrives as ctrl+wheel in Chromium and Firefox; Ctrl + mouse wheel too.
+    if (e.ctrlKey) wheel.kind = "pinch";
+    else if (fresh || wheel.kind === "pinch") wheel.kind = looksLikeTrackpad(e) ? "trackpad" : "mouse";
+    // A mouse-looking first event can still turn out to be a trackpad; never the other way.
+    else if (wheel.kind === "mouse" && looksLikeTrackpad(e)) wheel.kind = "trackpad";
+
     const view = currentView();
-    const scale = e.deltaMode === 1 ? 16 : 1;
+    const scale = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
     const dx = e.deltaX * scale;
     const dy = e.deltaY * scale;
     if (view === "field") {
-      // Pinch on a trackpad arrives as ctrl+wheel. A horizontal component means two-finger pan;
-      // a purely vertical wheel is a mouse wheel and zooms.
-      if (e.ctrlKey) fieldZoom(dy * 3);
-      else if (dx !== 0 || (Math.abs(dy) < 40 && !Number.isInteger(dy))) fieldPan(dx, dy);
+      if (wheel.kind === "pinch") fieldZoom(dy * 3);
+      else if (wheel.kind === "trackpad") fieldPan(dx, dy);
       else fieldZoom(dy);
     } else {
       const d = Math.abs(dx) > Math.abs(dy) ? dx : dy;
-      // A mouse wheel sends whole notches (~100px, integer, often 120). One notch is one card, so a
-      // long scroll moves a predictable number of cards and never snaps back mid-scroll. A trackpad
-      // sends small fractional deltas and scrubs continuously, snapping once it goes quiet.
-      if (Math.abs(d) >= 50 && Number.isInteger(d) && e.deltaMode !== 2) railBy(Math.sign(d) * Math.max(1, Math.round(Math.abs(d) / 110)), true);
+      if (wheel.kind === "pinch") return;
+      // One mouse notch is one card. A trackpad scrubs continuously and snaps once it goes quiet.
+      if (wheel.kind === "mouse") railBy(Math.sign(d) * Math.max(1, Math.round(Math.abs(d) / 110)), true);
       else railBy(d * 0.006);
     }
+  };
+
+  // Safari reports a trackpad pinch as gesture events rather than ctrl+wheel.
+  let gestureScale = 1;
+  const onGestureStart = (e: Event) => {
+    e.preventDefault();
+    gestureScale = 1;
+  };
+  const onGestureChange = (e: Event) => {
+    e.preventDefault();
+    const s = (e as Event & { scale?: number }).scale ?? 1;
+    if (!isLocked() && currentView() === "field") fieldZoom((gestureScale / s - 1) * 600);
+    gestureScale = s;
   };
 
   const onKey = (e: KeyboardEvent) => {
@@ -227,6 +273,8 @@ export function installInput(canvas: HTMLCanvasElement): () => void {
   canvas.addEventListener("click", onClick);
   canvas.addEventListener("pointerleave", onLeave);
   canvas.addEventListener("wheel", onWheel, { passive: false });
+  canvas.addEventListener("gesturestart", onGestureStart);
+  canvas.addEventListener("gesturechange", onGestureChange);
   window.addEventListener("keydown", onKey);
   return () => {
     canvas.removeEventListener("pointerdown", onDown);
@@ -236,6 +284,8 @@ export function installInput(canvas: HTMLCanvasElement): () => void {
     canvas.removeEventListener("click", onClick);
     canvas.removeEventListener("pointerleave", onLeave);
     canvas.removeEventListener("wheel", onWheel);
+    canvas.removeEventListener("gesturestart", onGestureStart);
+    canvas.removeEventListener("gesturechange", onGestureChange);
     window.removeEventListener("keydown", onKey);
   };
 }

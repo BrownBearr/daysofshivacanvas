@@ -29,6 +29,10 @@ const SHEET = Math.floor(2048 / CELL) * CELL;
 const PER_ROW = Math.floor(SHEET / CELL);
 const PER_SHEET = PER_ROW * PER_ROW;
 const CONCURRENCY = 12;
+// The low-res sheet: every clip at 32px in one small file. The stage paints from it the moment the
+// app runs, so the first screen never waits on the full sheets (the default sort is a shuffle, so
+// the opening screen draws from all of them).
+const LQ_CELL = 32;
 
 const offline = process.argv.includes("--offline");
 
@@ -70,6 +74,7 @@ async function main() {
 
   // Square "cover" crop to match how the stage crops tiles.
   const cells = new Array(names.length);
+  const lqCells = new Array(names.length);
   let next = 0;
   let done = 0;
   async function worker() {
@@ -79,9 +84,11 @@ async function main() {
         console.warn(`  skip ${names[i]}: ${e.message}`);
         return null;
       });
-      cells[i] = buf
-        ? await sharp(buf).resize(CELL, CELL, { fit: "cover", position: "centre", kernel: "lanczos3" }).toBuffer()
-        : null;
+      if (buf) {
+        const sq = sharp(buf).resize(CELL, CELL, { fit: "cover", position: "centre", kernel: "lanczos3" });
+        cells[i] = await sq.toBuffer();
+        lqCells[i] = await sharp(cells[i]).resize(LQ_CELL, LQ_CELL, { kernel: "lanczos3" }).toBuffer();
+      } else cells[i] = null;
       if (++done % 100 === 0) console.log(`  ${done}/${names.length}`);
     }
   }
@@ -111,6 +118,22 @@ async function main() {
     console.log(`  atlas-${s}.webp  ${slice.length} cells  ${(out.length / 1024).toFixed(0)}KB`);
   }
 
+  // Low-res sheet, same order as `placed`; items[name][3] is the cell index in it.
+  const lqPerRow = Math.ceil(Math.sqrt(placed.length));
+  const lqRows = Math.ceil(placed.length / lqPerRow);
+  const lqComposites = placed.map((c, k) => {
+    items[c.n].push(k);
+    return { input: lqCells[names.indexOf(c.n)], left: (k % lqPerRow) * LQ_CELL, top: Math.floor(k / lqPerRow) * LQ_CELL };
+  });
+  const lqOut = await sharp({
+    create: { width: lqPerRow * LQ_CELL, height: lqRows * LQ_CELL, channels: 3, background: "#808080" },
+  })
+    .composite(lqComposites)
+    .webp({ quality: Number(process.env.ATLAS_LQ_Q ?? 50), effort: 6 })
+    .toBuffer();
+  writeFileSync(join(OUT_DIR, "atlas-lq.webp"), lqOut);
+  console.log(`  atlas-lq.webp  ${placed.length} cells at ${LQ_CELL}px  ${(lqOut.length / 1024).toFixed(0)}KB`);
+
   const heights = [];
   for (let s = 0; s < sheetCount; s++) {
     const n = Math.min(PER_SHEET, placed.length - s * PER_SHEET);
@@ -119,7 +142,15 @@ async function main() {
 
   writeFileSync(
     MAP_OUT,
-    `${JSON.stringify({ cell: CELL, width: SHEET, heights, perRow: PER_ROW, sheets: sheetCount, items })}\n`
+    `${JSON.stringify({
+      cell: CELL,
+      width: SHEET,
+      heights,
+      perRow: PER_ROW,
+      sheets: sheetCount,
+      lq: { cell: LQ_CELL, perRow: lqPerRow, width: lqPerRow * LQ_CELL, height: lqRows * LQ_CELL },
+      items,
+    })}\n`
   );
   console.log(`done: ${placed.length} cells, ${(total / 1024).toFixed(0)}KB total -> public/atlas, src/data/atlas.json`);
 }

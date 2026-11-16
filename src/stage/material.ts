@@ -26,9 +26,6 @@ uniform vec3 uBg;
 uniform float uReveal;
 uniform vec2 uRevealDir;
 varying vec2 vUv;
-float hash(vec2 p) {
-  return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
-}
 vec3 sampleAtlas(vec2 uv) {
   return texture2D(uAtlas, uAtlasRect.xy + uv * uAtlasRect.zw).rgb;
 }
@@ -43,25 +40,17 @@ vec3 sampleMap(vec2 uv) {
 }
 void main() {
   vec2 uv = vUv;
-  float glow = 0.0;
-  // Resolve: a field tile arriving on screen is built from coarse blocks, starting at the edge it
-  // came in from. Each block of an 8x8 grid pops in on a jittered front, as one flat colour, then
-  // sharpens through 16, 32 and 64 blocks to the full image, carrying a faint light that settles
-  // as it resolves. Hidden blocks are discarded, so the tile stays in the opaque pass.
+  float mask = 1.0;
+  // Wipe: a field tile arriving on screen is uncovered by a soft edge travelling in from the side it
+  // entered by, while the image inside settles from a slight zoom. The feather blends into the page
+  // colour rather than alpha, and fully covered pixels are discarded, so the tile stays opaque.
   if (uReveal < 0.999) {
-    const float G = 8.0;
-    vec2 cell = floor(vUv * G);
-    vec2 cc = (cell + 0.5) / G - 0.5;
-    float span = abs(uRevealDir.x) + abs(uRevealDir.y) + 1e-4;
-    float d = clamp((0.5 * span - dot(cc, uRevealDir)) / span, 0.0, 1.0);
-    // sweep 0.9 + jitter 0.25 + per-block resolve 0.4 = 1.55, so every block is sharp at uReveal = 1.
-    float p = clamp((uReveal * 1.55 - d * 0.9 - hash(cell) * 0.25) / 0.4, 0.0, 1.0);
-    if (p <= 0.0) discard;
-    if (p < 1.0) {
-      float n = G * exp2(floor(p * 4.0));
-      uv = (floor(vUv * n) + 0.5) / n;
-    }
-    glow = 1.0 - p;
+    float e = 1.0 - pow(1.0 - uReveal, 3.0);
+    const float F = 0.35;
+    float t = 0.5 - dot(vUv - 0.5, uRevealDir); // 0 at the entry edge, 1 at the far edge
+    mask = smoothstep(0.0, 1.0, (e * (1.0 + F) - t) / F);
+    if (mask <= 0.0) discard;
+    uv = 0.5 + (vUv - 0.5) / (1.0 + 0.08 * (1.0 - e));
   }
   // Uniform branches: a settled tile samples one texture, not two. Fill rate is most of the cost
   // of a zoomed-out field on weak GPUs.
@@ -69,7 +58,7 @@ void main() {
   if (uMix <= 0.001) c = sampleAtlas(uv);
   else if (uMix >= 0.999) c = sampleMap(uv);
   else c = mix(sampleAtlas(uv), sampleMap(uv), uMix);
-  c = min(c * (1.0 + glow * 0.4) + glow * 0.025, vec3(1.0));
+  c = mix(uBg, c, mask);
   if (uReflect > 0.5) {
     // Mirrored below the card: strongest where it touches the card, gone within ~60% of its height.
     // Faded into the page colour rather than made transparent, so reflections stay opaque and the

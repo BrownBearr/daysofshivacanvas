@@ -140,8 +140,12 @@ function Controls({
             <div className="text-xl leading-tight font-semibold">Day {clip.name}</div>
             <div className="truncate text-sm text-[#9b9b98]">
               {formatDay(clip.name)}
-              <span className="px-1.5">/</span>
-              {styleLabel(clip.name)}
+              {styleLabel(clip.name) && (
+                <>
+                  <span className="px-1.5">/</span>
+                  {styleLabel(clip.name)}
+                </>
+              )}
             </div>
           </motion.div>
         </AnimatePresence>

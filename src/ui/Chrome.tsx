@@ -2,6 +2,7 @@ import { X } from "@phosphor-icons/react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import * as React from "react";
 import { daysMadeToday, formatDay } from "../lib/days";
+import { IS_MOBILE } from "../runtime";
 import { subscribeCurrent } from "../stage/engine";
 import { styleLabel } from "../state/sort";
 import { actions, useApp } from "../state/store";
@@ -56,8 +57,12 @@ export function Readout() {
               <div className="text-[17px] font-semibold text-ink">Day {name}</div>
               <div className="text-[13px] text-dim">
                 {formatDay(name)}
-                <span className="px-1.5">/</span>
-                {styleLabel(name)}
+                {styleLabel(name) && (
+                  <>
+                    <span className="px-1.5">/</span>
+                    {styleLabel(name)}
+                  </>
+                )}
               </div>
             </>
           ) : (
@@ -200,13 +205,20 @@ function seenWelcome(): boolean {
   }
 }
 
-const HINTS: [string, string][] = [
-  ["Drag", "move around"],
-  ["Scroll", "zoom, or flip through a stack"],
-  ["Click", "open a clip"],
-  ["1 to 4", "switch views"],
-  ["Esc", "close"],
-];
+const HINTS: [string, string][] = IS_MOBILE
+  ? [
+      ["Drag", "move around"],
+      ["Pinch", "zoom in and out"],
+      ["Swipe", "flip through Flow and Stack"],
+      ["Tap", "open a clip"],
+    ]
+  : [
+      ["Drag", "move around"],
+      ["Wheel or pinch", "zoom, or flip through a stack"],
+      ["Click", "open a clip"],
+      ["1 to 4", "switch views"],
+      ["Esc", "close"],
+    ];
 
 export function Welcome() {
   const [open, setOpen] = React.useState(() => !seenWelcome() && !new URLSearchParams(location.search).has("c"));
@@ -221,7 +233,7 @@ export function Welcome() {
   return (
     <Modal open={open} onClose={close} label="Welcome">
       <h2 className="pr-8 text-3xl font-semibold tracking-tight">Welcome to the gallery of Shiva</h2>
-      <p className="mt-3 text-[17px] text-dim">Enjoy your stay. Click on any thumbnail to see the full piece.</p>
+      <p className="mt-3 text-[17px] text-dim">Enjoy your stay. {IS_MOBILE ? "Tap" : "Click"} any thumbnail to see the full piece.</p>
       <dl className="mt-7 grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-3 border-t border-line pt-6">
         {HINTS.map(([k, v]) => (
           <React.Fragment key={k}>
@@ -233,7 +245,7 @@ export function Welcome() {
       <button
         type="button"
         onClick={close}
-        className="mt-8 h-12 w-full rounded-full bg-ink text-[16px] font-medium text-bg transition-transform active:scale-[0.98]"
+        className="mt-8 h-12 w-full rounded-full bg-ink text-[16px] font-medium text-bg transition-[scale] duration-150 ease-out active:scale-[0.96]"
       >
         Enter the gallery
       </button>
