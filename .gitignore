@@ -39,3 +39,6 @@ local-clips/
 
 # Benchmark output — machine-specific
 bench/
+
+# Recorded demo videos (scripts/record-demo.mjs)
+demo/

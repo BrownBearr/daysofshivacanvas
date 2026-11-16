@@ -18,7 +18,8 @@
     "clips:grid-posters": "node scripts/make-grid-posters.mjs",
     "clips:atlas": "node scripts/make-atlas.mjs",
     "clips:hd": "node scripts/make-hd-posters.mjs",
-    "smoke:mobile": "node scripts/smoke-mobile.mjs"
+    "smoke:mobile": "node scripts/smoke-mobile.mjs",
+    "demo": "node scripts/record-demo.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1053.0",

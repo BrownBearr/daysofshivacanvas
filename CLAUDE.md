@@ -72,6 +72,7 @@ scripts/
   smoke.mjs             # functional test (Playwright), must be 29/29
   smoke-mobile.mjs      # touch/phone test, must be 25/25
   bench.mjs             # frame-time benchmark (Playwright)
+  record-demo.mjs       # scripted tour -> demo/daysofshiva-demo.mp4 (npm run demo, needs ffmpeg)
   tag-styles.py         # CLIP style clusters + similarity order
   normalize-b2.mjs, make-grid-posters.mjs
 ```
